@@ -84,6 +84,9 @@ type MultitrackSpec struct {
 
 type MultitrackOptions struct {
 	tracker.Options
+	// Logger 可选：注入自定义 logboek logger（如写入发布日志系统）。
+	// 为 nil 时保持原行为（输出到进程默认 stdout 终端）。
+	Logger               types.LoggerInterface
 	DynamicClient        dynamic.Interface
 	DiscoveryClient      discovery.CachedDiscoveryInterface
 	Mapper               meta.RESTMapper
@@ -167,6 +170,8 @@ func Multitrack(kube kubernetes.Interface, specs MultitrackSpecs, opts Multitrac
 	}
 
 	mt := multitracker{
+		opts: opts,
+
 		DeploymentsSpecs:        make(map[string]MultitrackSpec),
 		DeploymentsContexts:     make(map[string]*multitrackerContext),
 		TrackingDeployments:     make(map[string]*multitrackerResourceState),
@@ -513,6 +518,8 @@ func (mt *multitracker) runGenericSpecTracker(res *generic.Resource, wg *sync.Wa
 }
 
 type multitracker struct {
+	opts MultitrackOptions
+
 	DeploymentsSpecs        map[string]MultitrackSpec
 	DeploymentsContexts     map[string]*multitrackerContext
 	TrackingDeployments     map[string]*multitrackerResourceState
