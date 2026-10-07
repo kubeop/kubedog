@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/werf/kubedog/pkg/informer"
 	"github.com/werf/kubedog/pkg/tracker"
 	"github.com/werf/kubedog/pkg/tracker/canary"
 	"github.com/werf/kubedog/pkg/tracker/daemonset"
@@ -207,6 +208,39 @@ func Multitrack(kube kubernetes.Interface, specs MultitrackSpecs, opts Multitrac
 
 	errorChan := make(chan error)
 	doneChan := make(chan struct{})
+
+	// 装配共享 informer 工厂：经典 tracker（deployment/sts/ds/job/canary）的
+	// informer 全部经此工厂创建（上游 40930a9 重构后 feed 传入 nil 会导致 panic）。
+	// 调用方也可通过 Options.InformerFactory 自行注入以跨多次 multitrack 复用。
+	if opts.Options.InformerFactory == nil {
+		if opts.DynamicClient == nil {
+			return fmt.Errorf("dynamic K8s client should be specified: required to build the shared informer factory (or provide Options.InformerFactory)")
+		}
+
+		stopCh := make(chan struct{})
+		defer close(stopCh)
+
+		watchErrCh := make(chan error, 1)
+		go func() {
+			for {
+				select {
+				case err := <-watchErrCh:
+					if err == nil {
+						continue
+					}
+					// Multitrack 返回后 errorChan 无人消费，非阻塞发送防 goroutine 泄漏
+					select {
+					case errorChan <- err:
+					default:
+					}
+				case <-stopCh:
+					return
+				}
+			}
+		}()
+
+		opts.Options.InformerFactory = informer.NewConcurrentInformerFactory(stopCh, watchErrCh, opts.DynamicClient, informer.ConcurrentInformerFactoryOptions{})
+	}
 
 	var statusProgressChan <-chan time.Time
 

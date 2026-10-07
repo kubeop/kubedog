@@ -42,8 +42,11 @@ type Tracker struct {
 }
 
 type Options struct {
-	ParentContext                            context.Context
-	Timeout                                  time.Duration
+	ParentContext context.Context
+	Timeout       time.Duration
+	// InformerFactory 共享 informer 工厂（由调用方注入，如 multitrack）。
+	// 为 nil 时经典 tracker 无法启动 informer（panic），请务必注入。
+	InformerFactory                          *util.Concurrent[*informer.InformerFactory]
 	LogsFromTime                             time.Time
 	SaveLogsOnlyForNumberOfReplicas          int
 	IgnoreLogs                               bool
