@@ -94,15 +94,18 @@ type MultitrackOptions struct {
 	StatusProgressPeriod time.Duration
 }
 
-func newMultitrackOptions(parentContext context.Context, timeout, statusProgessPeriod time.Duration, logsFromTime time.Time, ignoreReadinessProbeFailsByContainerName map[string]time.Duration) MultitrackOptions {
+func newMultitrackOptions(parentContext context.Context, timeout, statusProgessPeriod time.Duration, logsFromTime time.Time, opts MultitrackOptions) MultitrackOptions {
 	return MultitrackOptions{
 		Options: tracker.Options{
 			ParentContext:                            parentContext,
 			Timeout:                                  timeout,
 			LogsFromTime:                             logsFromTime,
-			IgnoreReadinessProbeFailsByContainerName: ignoreReadinessProbeFailsByContainerName,
+			IgnoreReadinessProbeFailsByContainerName: opts.IgnoreReadinessProbeFailsByContainerName,
+			// 共享 informer 工厂：由 Multitrack() 装配（或调用方注入），必须透传给各 spec tracker
+			InformerFactory:                          opts.InformerFactory,
 		},
 		StatusProgressPeriod: statusProgessPeriod,
+		Logger:               opts.Logger,
 	}
 }
 
@@ -302,7 +305,7 @@ func (mt *multitracker) Start(kube kubernetes.Interface, specs MultitrackSpecs, 
 		wg.Add(1)
 
 		go mt.runSpecTracker("deploy", spec, mt.DeploymentsContexts[spec.ResourceName], &wg, mt.DeploymentsContexts, doneChan, errorChan, func(spec MultitrackSpec, mtCtx *multitrackerContext) error {
-			return mt.TrackDeployment(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, spec.IgnoreReadinessProbeFailsByContainerName))
+			return mt.TrackDeployment(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, opts))
 		})
 	}
 
@@ -314,7 +317,7 @@ func (mt *multitracker) Start(kube kubernetes.Interface, specs MultitrackSpecs, 
 		wg.Add(1)
 
 		go mt.runSpecTracker("sts", spec, mt.StatefulSetsContexts[spec.ResourceName], &wg, mt.StatefulSetsContexts, doneChan, errorChan, func(spec MultitrackSpec, mtCtx *multitrackerContext) error {
-			return mt.TrackStatefulSet(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, spec.IgnoreReadinessProbeFailsByContainerName))
+			return mt.TrackStatefulSet(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, opts))
 		})
 	}
 
@@ -326,7 +329,7 @@ func (mt *multitracker) Start(kube kubernetes.Interface, specs MultitrackSpecs, 
 		wg.Add(1)
 
 		go mt.runSpecTracker("ds", spec, mt.DaemonSetsContexts[spec.ResourceName], &wg, mt.DaemonSetsContexts, doneChan, errorChan, func(spec MultitrackSpec, mtCtx *multitrackerContext) error {
-			return mt.TrackDaemonSet(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, spec.IgnoreReadinessProbeFailsByContainerName))
+			return mt.TrackDaemonSet(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, opts))
 		})
 	}
 
@@ -338,7 +341,7 @@ func (mt *multitracker) Start(kube kubernetes.Interface, specs MultitrackSpecs, 
 		wg.Add(1)
 
 		go mt.runSpecTracker("job", spec, mt.JobsContexts[spec.ResourceName], &wg, mt.JobsContexts, doneChan, errorChan, func(spec MultitrackSpec, mtCtx *multitrackerContext) error {
-			return mt.TrackJob(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, spec.IgnoreReadinessProbeFailsByContainerName))
+			return mt.TrackJob(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, opts))
 		})
 	}
 
@@ -350,7 +353,7 @@ func (mt *multitracker) Start(kube kubernetes.Interface, specs MultitrackSpecs, 
 		wg.Add(1)
 
 		go mt.runSpecTracker("canary", spec, mt.CanariesContexts[spec.ResourceName], &wg, mt.CanariesContexts, doneChan, errorChan, func(spec MultitrackSpec, mtCtx *multitrackerContext) error {
-			return mt.TrackCanary(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, spec.IgnoreReadinessProbeFailsByContainerName))
+			return mt.TrackCanary(kube, spec, newMultitrackOptions(mtCtx.Context, opts.Timeout, opts.StatusProgressPeriod, opts.LogsFromTime, opts))
 		})
 	}
 
