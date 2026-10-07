@@ -472,7 +472,7 @@ func restMapper(cachedDiscoveryClient *discovery.CachedDiscoveryInterface) meta.
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(*cachedDiscoveryClient)
 
 	return restmapper.NewShortcutExpander(mapper, *cachedDiscoveryClient, func(s string) {
-		fmt.Printf(s)
+		fmt.Printf("%s", s)
 	})
 }
 
