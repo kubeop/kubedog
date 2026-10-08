@@ -1,3 +1,6 @@
+// Package kube 提供 Kubernetes 客户端初始化：
+// 从 kubeconfig / in-cluster / base64 配置构建 clientset、dynamic client
+// 与 discovery 客户端，供 multitrack 等跟踪器使用。
 package kube
 
 import (
@@ -9,14 +12,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	diskcached "k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
-	_ "k8s.io/client-go/plugin/pkg/client/auth/azure"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/exec"
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
@@ -33,7 +33,6 @@ const (
 
 var (
 	Kubernetes            kubernetes.Interface
-	Client                kubernetes.Interface
 	DynamicClient         dynamic.Interface
 	CachedDiscoveryClient discovery.CachedDiscoveryInterface
 	Mapper                meta.RESTMapper
@@ -45,6 +44,13 @@ type InitOptions struct {
 	KubeConfigOptions
 }
 
+// Init 按优先级（kubeconfig → in-cluster）初始化全局客户端。
+// 典型用法：
+//
+//	err := kube.Init(kube.InitOptions{KubeConfigOptions: kube.KubeConfigOptions{
+//	    ConfigPath: "/path/to/kubeconfig",
+//	}})
+//	multitrack.Multitrack(kube.Kubernetes, specs, opts)
 func Init(opts InitOptions) error {
 	config, err := GetKubeConfig(opts.KubeConfigOptions)
 	if err != nil {
@@ -57,7 +63,6 @@ func Init(opts InitOptions) error {
 			return err
 		}
 		Kubernetes = clientset
-		Client = clientset
 
 		dynamicClient, err := dynamic.NewForConfig(config.Config)
 		if err != nil {
@@ -96,6 +101,8 @@ type KubeConfig struct {
 	DefaultNamespace string
 }
 
+// GetKubeConfig 解析 kube 配置：优先 out-of-cluster（kubeconfig 文件/内容），
+// 其次 in-cluster（ServiceAccount）。
 func GetKubeConfig(opts KubeConfigOptions) (*KubeConfig, error) {
 	// Try to load from kubeconfig in flags or from ~/.kube/config
 	config, outOfClusterErr := getOutOfClusterConfig(
@@ -126,69 +133,6 @@ func GetKubeConfig(opts KubeConfigOptions) (*KubeConfig, error) {
 	}
 
 	return config, outOfClusterErr
-}
-
-type GetAllContextsClientsOptions struct {
-	ConfigPath          string
-	ConfigDataBase64    string
-	ConfigPathMergeList []string
-	BearerToken         string
-	BearerTokenFile     string
-
-	APIServerURL string
-	Insecure     bool
-	CADataBase64 string
-}
-
-type ContextClient struct {
-	ContextName      string
-	ContextNamespace string
-	Client           kubernetes.Interface
-}
-
-func GetAllContextsClients(opts GetAllContextsClientsOptions) ([]*ContextClient, error) {
-	// Try to load contexts from kubeconfig in flags or from ~/.kube/config
-	var outOfClusterErr error
-
-	contexts, outOfClusterErr := getOutOfClusterContextsClients(KubeConfigOptions{
-		ConfigPath:          opts.ConfigPath,
-		ConfigDataBase64:    opts.ConfigDataBase64,
-		ConfigPathMergeList: opts.ConfigPathMergeList,
-	})
-	if len(contexts) > 0 {
-		return contexts, nil
-	}
-
-	if hasInClusterConfig() {
-		contextClient, err := getInClusterContextClient()
-		if err != nil {
-			return nil, err
-		}
-		return []*ContextClient{contextClient}, nil
-	}
-
-	tokenClient, err := getTokenContextClient(KubeConfigOptions{
-		ConfigPath:          opts.ConfigPath,
-		ConfigDataBase64:    opts.ConfigDataBase64,
-		ConfigPathMergeList: opts.ConfigPathMergeList,
-		BearerToken:         opts.BearerToken,
-		BearerTokenFile:     opts.BearerTokenFile,
-		APIServerURL:        opts.APIServerURL,
-		Insecure:            opts.Insecure,
-		CADataBase64:        opts.CADataBase64,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if tokenClient != nil {
-		return []*ContextClient{tokenClient}, nil
-	}
-
-	if outOfClusterErr != nil {
-		return nil, outOfClusterErr
-	}
-
-	return nil, nil
 }
 
 func makeOutOfClusterClientConfigError(configPath, context string, err error) error {
@@ -322,70 +266,6 @@ func getOutOfClusterConfig(opts KubeConfigOptions) (*KubeConfig, error) {
 	return res, nil
 }
 
-func getOutOfClusterContextsClients(opts KubeConfigOptions) ([]*ContextClient, error) {
-	var res []*ContextClient
-
-	configData, err := parseConfigDataBase64(opts.ConfigDataBase64)
-	if err != nil {
-		return nil, fmt.Errorf("unable to parse base64 config data: %w", err)
-	}
-
-	overrides := &clientcmd.ConfigOverrides{
-		ClusterDefaults: clientcmd.ClusterDefaults,
-		AuthInfo: api.AuthInfo{
-			Token:     opts.BearerToken,
-			TokenFile: opts.BearerTokenFile,
-		},
-	}
-
-	clientConfig, err := GetClientConfig(
-		"",
-		opts.ConfigPath,
-		configData,
-		opts.ConfigPathMergeList,
-		overrides,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	rc, err := clientConfig.RawConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	for contextName, context := range rc.Contexts {
-		clientConfig, err := GetClientConfig(
-			contextName,
-			opts.ConfigPath,
-			configData,
-			opts.ConfigPathMergeList,
-			overrides,
-		)
-		if err != nil {
-			return nil, makeOutOfClusterClientConfigError(opts.ConfigPath, contextName, err)
-		}
-
-		config, err := clientConfig.ClientConfig()
-		if err != nil {
-			return nil, makeOutOfClusterClientConfigError(opts.ConfigPath, contextName, err)
-		}
-
-		clientset, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			return nil, err
-		}
-
-		res = append(res, &ContextClient{
-			ContextName:      contextName,
-			ContextNamespace: context.Namespace,
-			Client:           clientset,
-		})
-	}
-
-	return res, nil
-}
-
 func getInClusterConfig() (*KubeConfig, error) {
 	res := &KubeConfig{}
 
@@ -404,60 +284,6 @@ func getInClusterConfig() (*KubeConfig, error) {
 	return res, nil
 }
 
-func getInClusterContextClient() (*ContextClient, error) {
-	kubeConfig, err := getInClusterConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	clientset, err := kubernetes.NewForConfig(kubeConfig.Config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &ContextClient{
-		ContextName:      "inClusterContext",
-		ContextNamespace: kubeConfig.DefaultNamespace,
-		Client:           clientset,
-	}, nil
-}
-
-func GroupVersionResourceByKind(client kubernetes.Interface, kind string) (schema.GroupVersionResource, error) {
-	lists, err := client.Discovery().ServerPreferredResources()
-	if err != nil {
-		return schema.GroupVersionResource{}, err
-	}
-
-	for _, list := range lists {
-		if len(list.APIResources) == 0 {
-			continue
-		}
-
-		gv, err := schema.ParseGroupVersion(list.GroupVersion)
-		if err != nil {
-			continue
-		}
-
-		for _, resource := range list.APIResources {
-			if len(resource.Verbs) == 0 {
-				continue
-			}
-
-			if kind == resource.Kind {
-				groupVersionResource := schema.GroupVersionResource{
-					Resource: resource.Name,
-					Group:    gv.Group,
-					Version:  gv.Version,
-				}
-
-				return groupVersionResource, nil
-			}
-		}
-	}
-
-	return schema.GroupVersionResource{}, fmt.Errorf("kind %s is not supported", kind)
-}
-
 func cachedDiscoveryClient(config rest.Config) (discovery.CachedDiscoveryInterface, error) {
 	config.Burst = 100
 
@@ -474,43 +300,4 @@ func restMapper(cachedDiscoveryClient *discovery.CachedDiscoveryInterface) meta.
 	return restmapper.NewShortcutExpander(mapper, *cachedDiscoveryClient, func(s string) {
 		fmt.Printf("%s", s)
 	})
-}
-
-func getTokenContextClient(opts KubeConfigOptions) (*ContextClient, error) {
-	if opts.BearerToken == "" {
-		return nil, fmt.Errorf("missing bearer token")
-	}
-	if opts.APIServerURL == "" {
-		return nil, fmt.Errorf("missing API server URL")
-	}
-
-	var caData []byte
-	var err error
-
-	if opts.CADataBase64 != "" {
-		caData, err = base64.StdEncoding.DecodeString(opts.CADataBase64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid CADataBase64: %w", err)
-		}
-	}
-
-	cfg := &rest.Config{
-		Host:        opts.APIServerURL,
-		BearerToken: opts.BearerToken,
-		TLSClientConfig: rest.TLSClientConfig{
-			Insecure: opts.Insecure,
-			CAData:   caData,
-		},
-	}
-
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create kubernetes client: %w", err)
-	}
-
-	return &ContextClient{
-		ContextName:      "token",
-		ContextNamespace: "",
-		Client:           clientset,
-	}, nil
 }

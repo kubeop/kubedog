@@ -1,3 +1,7 @@
+// Package multitrack 提供多资源跟踪（multitracker）能力：
+// 并发跟踪 Deployment/StatefulSet/DaemonSet/Job/Canary 以及任意自定义资源，
+// 直到全部就绪、失败或超时。本包是面向库调用者的标准入口，
+// 所有输出经 logsink 以结构化事件形式交付，便于 aiops 等平台直接消费。
 package multitrack
 
 import (
@@ -23,7 +27,6 @@ import (
 	"github.com/kubeop/kubedog/pkg/tracker/job"
 	"github.com/kubeop/kubedog/pkg/tracker/statefulset"
 	"github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack/generic"
-	"github.com/werf/logboek/pkg/types"
 )
 
 type TrackTerminationMode string
@@ -42,14 +45,6 @@ const (
 	// to reimplement some things in kubedog, and this feature might makes sense once again.
 	LegacyHopeUntilEndOfDeployProcess FailMode = "HopeUntilEndOfDeployProcess"
 )
-
-// type DeployCondition string
-//
-// const (
-//	ControllerIsReady DeployCondition = "ControllerIsReady"
-//	PodIsReady        DeployCondition = "PodIsReady"
-//	EndOfDeploy       DeployCondition = "EndOfDeploy"
-// )
 
 var ErrFailWholeDeployProcessImmediately = errors.New("fail whole deploy process immediately")
 
@@ -85,9 +80,9 @@ type MultitrackSpec struct {
 
 type MultitrackOptions struct {
 	tracker.Options
-	// Logger 可选：注入自定义 logboek logger（如写入发布日志系统）。
-	// 为 nil 时保持原行为（输出到进程默认 stdout 终端）。
-	Logger               types.LoggerInterface
+	// LogSink 可选：注入结构化日志接收器（如 aiops 发布日志系统）。
+	// 为 nil 时使用 NewDefaultLogSink()（写 stdout 的 JSON Lines）。
+	Logger               LogSink
 	DynamicClient        dynamic.Interface
 	DiscoveryClient      discovery.CachedDiscoveryInterface
 	Mapper               meta.RESTMapper
@@ -175,6 +170,8 @@ func Multitrack(kube kubernetes.Interface, specs MultitrackSpecs, opts Multitrac
 
 	mt := multitracker{
 		opts: opts,
+
+		resourceNamespaces: make(map[string]string),
 
 		DeploymentsSpecs:        make(map[string]MultitrackSpec),
 		DeploymentsContexts:     make(map[string]*multitrackerContext),
@@ -294,6 +291,29 @@ func Multitrack(kube kubernetes.Interface, specs MultitrackSpecs, opts Multitrac
 func (mt *multitracker) Start(kube kubernetes.Interface, specs MultitrackSpecs, doneChan chan struct{}, errorChan chan error, opts MultitrackOptions) {
 	mt.mux.Lock()
 	defer mt.mux.Unlock()
+
+	// 注册各资源的 namespace，供日志事件自动补全
+	registerNS := func(kind string, spec MultitrackSpec) {
+		mt.resourceNamespaces[kind+"/"+spec.ResourceName] = spec.Namespace
+	}
+	for _, spec := range specs.Deployments {
+		registerNS("deploy", spec)
+	}
+	for _, spec := range specs.StatefulSets {
+		registerNS("sts", spec)
+	}
+	for _, spec := range specs.DaemonSets {
+		registerNS("ds", spec)
+	}
+	for _, spec := range specs.Jobs {
+		registerNS("job", spec)
+	}
+	for _, spec := range specs.Canaries {
+		registerNS("canary", spec)
+	}
+	for _, spec := range specs.Generics {
+		mt.resourceNamespaces[spec.GroupVersionKindNamespaceString()+"/"+spec.Name] = spec.Namespace
+	}
 
 	var wg sync.WaitGroup
 
@@ -594,10 +614,11 @@ type multitracker struct {
 	isFailed      bool
 	isTerminating bool
 
-	displayCalled             bool
-	currentLogProcessHeader   string
-	currentLogProcess         types.LogProcessInterface
 	serviceMessagesByResource map[string][]string
+
+	// resourceNamespaces 注册 kind/name → namespace 映射，
+	// 供 emit 自动补全事件的 namespace 字段。
+	resourceNamespaces map[string]string
 }
 
 type multitrackerContext struct {
@@ -726,7 +747,7 @@ func (mt *multitracker) handleResourceFailure(resourcesStates map[string]*multit
 		}
 
 		if forceFailure {
-			mt.displayMultitrackServiceMessageF("Critical failure for %s/%s has been occurred: stop tracking immediately!\n", kind, spec.ResourceName, *spec.AllowFailuresCount)
+			mt.displayMultitrackServiceMessageF("Critical failure for %s/%s has been occurred: stop tracking immediately!\n", kind, spec.ResourceName)
 		} else {
 			mt.displayMultitrackServiceMessageF("Allowed failures count for %s/%s exceeded %d errors: stop tracking immediately!\n", kind, spec.ResourceName, *spec.AllowFailuresCount)
 		}

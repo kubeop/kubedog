@@ -16,7 +16,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	watchtools "k8s.io/client-go/tools/watch"
 
-	"github.com/kubeop/kubedog/pkg/display"
 	"github.com/kubeop/kubedog/pkg/informer"
 	commontracker "github.com/kubeop/kubedog/pkg/tracker"
 	"github.com/kubeop/kubedog/pkg/tracker/canary"
@@ -1370,7 +1369,7 @@ func (t *DynamicReadinessTracker) handlePodLogChunk(logChunk *pod.PodLogChunk, l
 	logLines := logChunk.LogLines
 
 	if t.ignoreLogsByRegex != nil {
-		var filteredLogLines []display.LogLine
+		var filteredLogLines []pod.LogLine
 		for _, logLine := range logLines {
 			if !t.ignoreLogsByRegex.MatchString(logLine.Message) {
 				filteredLogLines = append(filteredLogLines, logLine)
@@ -1381,7 +1380,7 @@ func (t *DynamicReadinessTracker) handlePodLogChunk(logChunk *pod.PodLogChunk, l
 
 	if len(t.ignoreLogsByRegexForContainers) > 0 {
 		if regex, ok := t.ignoreLogsByRegexForContainers[logChunk.ContainerName]; ok {
-			var filteredLogLines []display.LogLine
+			var filteredLogLines []pod.LogLine
 			for _, logLine := range logLines {
 				if !regex.MatchString(logLine.Message) {
 					filteredLogLines = append(filteredLogLines, logLine)
@@ -1392,7 +1391,7 @@ func (t *DynamicReadinessTracker) handlePodLogChunk(logChunk *pod.PodLogChunk, l
 	}
 
 	if t.saveLogsByRegex != nil {
-		var filteredLogLines []display.LogLine
+		var filteredLogLines []pod.LogLine
 		for _, logLine := range logLines {
 			if t.saveLogsByRegex.MatchString(logLine.Message) {
 				filteredLogLines = append(filteredLogLines, logLine)
@@ -1403,7 +1402,7 @@ func (t *DynamicReadinessTracker) handlePodLogChunk(logChunk *pod.PodLogChunk, l
 
 	if len(t.saveLogsByRegexForContainers) > 0 {
 		if regex, ok := t.saveLogsByRegexForContainers[logChunk.ContainerName]; ok {
-			var filteredLogLines []display.LogLine
+			var filteredLogLines []pod.LogLine
 			for _, logLine := range logLines {
 				if regex.MatchString(logLine.Message) {
 					filteredLogLines = append(filteredLogLines, logLine)

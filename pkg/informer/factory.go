@@ -9,7 +9,6 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 
-	"github.com/kubeop/kubedog/pkg/display"
 	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
 )
 
@@ -37,7 +36,7 @@ func NewConcurrentInformerFactory(stopCh <-chan struct{}, watchErrCh chan<- erro
 }
 
 func warnAboutNonFatalWatchError(gvr schema.GroupVersionResource, namespace string, err error) {
-	display.OutF("WARNING: no access to %s in namespace %q, tracking continues without it: %s\n", gvr.String(), namespace, err)
+	fmt.Printf("WARNING: no access to %s in namespace %q, tracking continues without it: %s\n", gvr.String(), namespace, err)
 }
 
 // InformerOptions are the settings of a particular informer.

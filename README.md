@@ -1,79 +1,167 @@
-<p align="center">
-  <img src="doc/kubedog-logo.svg?sanitize=true" style="max-height:100%;" height="100">
-</p>
-
 # kubedog
 
-Kubedog is a library to watch and follow Kubernetes resources in CI/CD deploy pipelines.
+kubedog 是一个 **纯标准库（library-only）**：并发跟踪 Kubernetes 资源
+（Deployment / StatefulSet / DaemonSet / Job / Canary / 任意自定义资源），
+直到全部就绪、失败或超时，并以**结构化日志事件**输出全过程。
 
-This library is used in the [werf CI/CD tool](https://github.com/werf/werf) to track resources during deploy process.
 
-**NOTE:** Kubedog also includes a CLI, however it provides a *minimal* interface to access library functions. CLI was created to check library features and for debug purposes. Currently, we have no plans on further improvement of CLI.
 
-## Table of Contents
-- [Install kubedog CLI](#install-kubedog-cli)
-   - [Linux/macOS](#linuxmacos)
-   - [Windows](#windows-powershell)
-   - [Alternative binary installation](#alternative-binary-installation)
-- [Usage](#usage)
-- [Community](#community)
-- [License](#license)
+本仓库基于 [werf/kubedog](https://github.com/werf/kubedog) 的发布跟踪组件裁剪而来：
+- 仅保留 multitracker 多资源跟踪能力；
+- 无 CLI、无终端渲染依赖（ANSI 颜色 / 终端宽度自适应 / TTY 进度条全部移除）；
+- 日志输出为结构化事件流（默认 JSON Lines），便于平台直接解析入库、按资源分组展示。
 
-## Install `kubedog` CLI
 
-### Linux/macOS
 
-[Install trdl](https://github.com/werf/trdl/releases/) to `~/bin/trdl`, which will manage `kubedog` installation and updates. Add `~/bin` to your $PATH.
+## 安装
 
-Add `kubedog` repo to `trdl`:
-```shell
-trdl add kubedog https://tuf.kubedog.werf.io 1 2cc56abdc649a9699074097ba60206f1299e43b320d6170c40eab552dcb940d9e813a8abf5893ff391d71f0a84b39111ffa6403a3e038b81634a40d29674a531
+```bash
+go get github.com/kubeop/kubedog
 ```
 
-To use `kubedog` on a workstation we recommend setting up `kubedog` _automatic activation_. For this the activation command should be executed for each new shell session. Often this is achieved by adding the activation command to `~/.bashrc` (for Bash), `~/.zshrc` (for Zsh) or to the one of the profile files, but this depends on the OS/shell/terminal. Refer to your shell/terminal manuals for more information.
 
-This is the `kubedog` activation command for the current shell-session:
-```shell
-source "$(trdl use kubedog 0 stable)"
+
+## 快速上手
+
+### 1. 初始化 Kubernetes 客户端
+
+```go
+import "github.com/kubeop/kubedog/pkg/kube"
+
+err := kube.Init(kube.InitOptions{
+    KubeConfigOptions: kube.KubeConfigOptions{
+        ConfigPath: "/path/to/kubeconfig", // 或 ConfigDataBase64 / in-cluster 自动发现
+    },
+})
 ```
 
-To use `kubedog` in CI prefer activating `kubedog` manually instead. For this execute the activation command in the beginning of your CI job, before calling the `kubedog` binary.
 
-### Windows (PowerShell)
 
-Following instructions should be executed in PowerShell.
+### 2. 跟踪资源直到就绪
 
-[Install trdl](https://github.com/werf/trdl/releases/) to `<disk>:\Users\<your username>\bin\trdl`, which will manage `kubedog` installation and updates. Add `<disk>:\Users\<your username>\bin\` to your $PATH environment variable.
+```go
+import "github.com/kubeop/kubedog/pkg/multitracker"
 
-Add `kubedog` repo to `trdl`:
-```powershell
-trdl add kubedog https://tuf.kubedog.werf.io 1 2cc56abdc649a9699074097ba60206f1299e43b320d6170c40eab552dcb940d9e813a8abf5893ff391d71f0a84b39111ffa6403a3e038b81634a40d29674a531
+err := multitracker.Run(ctx, multitracker.Specs{
+    Deployments: []multitrack.MultitrackSpec{
+        {ResourceName: "web", Namespace: "prod"},
+    },
+    Jobs: []multitrack.MultitrackSpec{
+        {ResourceName: "migrate", Namespace: "prod"},
+    },
+}, multitracker.Options{
+    KubeClient:   kube.Kubernetes,
+    DynamicClient: kube.DynamicClient, // 跟踪 Generics 时必填
+    Timeout:      10 * time.Minute,
+})
 ```
 
-To use `kubedog` on a workstation we recommend setting up `kubedog` _automatic activation_. For this the activation command should be executed for each new PowerShell session. For PowerShell this is usually achieved by adding the activation command to [$PROFILE file](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_profiles).
+返回 `nil` 表示全部资源就绪；失败时错误信息包含失败资源清单与原因。
 
-This is the `kubedog` activation command for the current PowerShell-session:
-```powershell
-. $(trdl use kubedog 0 stable)
+
+
+### 3. 接管日志输出（对接 aiops 发布日志）
+
+默认输出 JSON Lines 到 stdout。注入 `LogSink` 即可将事件流转投到平台：
+
+```go
+import "github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack"
+
+opts := multitracker.Options{
+    KubeClient: kube.Kubernetes,
+    Logger: multitrack.FuncLogSink(func(e *multitrack.Event) {
+        switch e.Type {
+        case multitrack.EventResourceStatus: // 周期性状态快照 → 追加到资源时间线
+        case multitrack.EventResourceLog:     // 容器日志 → 按 pod/container 分组展示
+        case multitrack.EventResourceError:   // 跟踪失败 → 标红并终止发布
+        }
+    }),
+}
 ```
 
-To use `kubedog` in CI prefer activating `kubedog` manually instead. For this execute the activation command in the beginning of your CI job, before calling the `kubedog` binary.
 
-### Alternative binary installation
 
-The recommended way to install `kubedog` is described above. Alternatively, although not recommended, you can download `kubedog` binary straight from the [GitHub Releases page](https://github.com/kubeop/kubedog/releases/), optionally verifying the binary with the PGP signature.
+## 事件模型
 
-## Usage
+每条日志是一个 JSON 对象：
 
-* [CLI usage](doc/usage.md#cli-usage)
-* [Library usage: Multitracker](doc/usage.md#Multitracker)
+```json
+{"time":"2026-10-08T10:15:30+08:00","type":"resource_status","level":"info",
+ "resource":"deploy/web","namespace":"prod",
+ "message":"deploy/web (replicas=3/3, available=3/3, uptodate=3/3)",
+ "data":{"replicas":"3/3","available":"3/3","uptodate":"3/3","isReady":true}}
+```
 
-## Community
+| type | 说明 | 典型 data 字段 |
+|------|------|----------------|
+| `resource_status` | 资源状态快照（周期/变化时） | `isReady` `isFailed` `replicas` `available` `uptodate` `status` `condition` `error` |
+| `resource_log` | 容器日志块 | `pod` `container` `lines` |
+| `resource_service_message` | 资源级服务消息（added / become READY 等） | — |
+| `resource_event` | K8s Event 转发 | — |
+| `resource_error` | 资源跟踪失败原因 | — |
+| `tracking_summary` | 会话级汇总（失败资源服务消息清单） | `failedResources` |
 
-Please feel free to reach us via [project's Discussions](https://github.com/kubeop/kubedog/discussions) and [werf's Telegram group](https://t.me/werf_io) (there's [another one in Russian](https://t.me/werf_ru) as well).
+- `level`：`info` / `warning` / `error` / `debug`；
+- `resource`：`kind/name` 或嵌套 `deploy/web/po/web-abc` 形式，可直接作为分组键。
 
-You're also welcome to follow [@werf_io](https://twitter.com/werf_io) to stay informed about all important news, articles, etc.
+
+
+## 核心包
+
+| 包 | 职责 |
+|----|------|
+| `pkg/multitracker` | 顶层入口：`Run(ctx, specs, opts)` |
+| `pkg/trackers/rollout/multitrack` | multitracker 核心实现与事件模型（`Event` / `LogSink`） |
+| `pkg/kube` | 客户端初始化（kubeconfig / in-cluster / base64） |
+| `pkg/tracker/*` | 各资源类型 tracker（deploy/sts/ds/job/pod/generic/canary） |
+| `pkg/informer` | 共享 dynamic informer 工厂 |
+
+
+
+## 高级用法
+
+### 跟踪任意自定义资源（Generics）
+
+```go
+specs.Generics = []*generic.Spec{{
+    ResourceID: &resid.ResourceID{
+        Name: "my-crd", Namespace: "prod",
+        GroupVersionKind: schema.GroupVersionKind{Group: "example.com", Version: "v1", Kind: "MyCRD"},
+    },
+    ShowServiceMessages: true,
+}}
+```
+
+需要同时提供 `DynamicClient` / `DiscoveryClient` / `Mapper`。
+
+
+
+### 失败策略
+
+每个 spec 可配置 `FailMode`：
+- `FailWholeDeployProcessImmediately`（默认）：失败计数超过 `AllowFailuresCount` 立即终止整个跟踪；
+- `IgnoreAndContinueDeployProcess`：仅记录错误继续跟踪；
+- `HopeUntilEndOfDeployProcess`：等待其他资源就绪后再开始计数。
+
+
+
+### 状态输出周期
+
+`Options.StatusProgressPeriod` 默认 5 秒；设为负值关闭周期快照（仅事件驱动输出）。
+
+
+
+## 验证
+
+```bash
+go build ./...
+go vet ./...
+go test ./...
+go test -tags ai_tests ./pkg/tracker/generic/ ./pkg/tracker/event/
+```
+
+
 
 ## License
 
-Kubedog is an Open Source project licensed under the [Apache License](https://www.apache.org/licenses/LICENSE-2.0).
+Apache License 2.0.

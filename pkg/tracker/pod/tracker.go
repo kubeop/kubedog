@@ -18,7 +18,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/kubeop/kubedog/pkg/display"
 	"github.com/kubeop/kubedog/pkg/informer"
 	"github.com/kubeop/kubedog/pkg/tracker"
 	"github.com/kubeop/kubedog/pkg/tracker/debug"
@@ -30,6 +29,12 @@ var errLogStreamingTimeout = errors.New("log streaming timeout reached")
 
 const containerLogLineLengthLimit = 64 * 1024
 
+// LogLine 容器日志行（Timestamp 为 K8s 原始时间戳字符串，Message 为日志正文）。
+type LogLine struct {
+	Timestamp string
+	Message   string
+}
+
 type ContainerError struct {
 	Message       string
 	ContainerName string
@@ -37,7 +42,7 @@ type ContainerError struct {
 
 type ContainerLogChunk struct {
 	ContainerName string
-	LogLines      []display.LogLine
+	LogLines      []LogLine
 }
 
 type PodLogChunk struct {
@@ -432,7 +437,8 @@ func (pod *Tracker) handleContainersState(object *corev1.Pod) error {
 
 func (pod *Tracker) followContainerLogs(ctx context.Context, containerName string, sinceTime *metav1.Time) error {
 	// See: https://github.com/kubernetes/kubernetes/issues/104580#issuecomment-905744137
-	ctx, _ = context.WithTimeoutCause(ctx, 3*time.Hour, errLogStreamingTimeout)
+	ctx, cancel := context.WithTimeoutCause(ctx, 3*time.Hour, errLogStreamingTimeout)
+	defer cancel()
 
 	logOpts := &corev1.PodLogOptions{
 		Container:  containerName,
@@ -459,7 +465,7 @@ func (pod *Tracker) followContainerLogs(ctx context.Context, containerName strin
 		n, err := readCloser.Read(chunkBuf)
 
 		if n > 0 {
-			chunkLines := make([]display.LogLine, 0)
+			chunkLines := make([]LogLine, 0)
 			for i := 0; i < n; i++ {
 				bt := chunkBuf[i]
 
@@ -474,7 +480,7 @@ func (pod *Tracker) followContainerLogs(ctx context.Context, containerName strin
 
 					lineParts := strings.SplitN(line, " ", 2)
 					if len(lineParts) == 2 {
-						chunkLines = append(chunkLines, display.LogLine{Timestamp: lineParts[0], Message: lineParts[1]})
+						chunkLines = append(chunkLines, LogLine{Timestamp: lineParts[0], Message: lineParts[1]})
 					}
 
 					continue

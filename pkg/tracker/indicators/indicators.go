@@ -1,26 +1,11 @@
+// Package indicators 提供资源状态指示器数据模型：
+// 描述资源当前值与目标值（期望值）的比较语义，供各 tracker 判定就绪/失败。
+// 本包只做纯数据建模，不做任何终端渲染。
 package indicators
 
-import (
-	"fmt"
+import "fmt"
 
-	"github.com/kubeop/kubedog/pkg/utils"
-)
-
-type FormatTableElemOptions struct {
-	// Show previous value as progressing OLD_VALUE->NEW_VALUE if the value has changed
-	ShowProgress bool
-
-	// Disable yellow and red colors for resources with fail-mode=IgnoreAndContinueDeployProcess
-	DisableWarningColors bool
-
-	// Show target value in format VALUE/TARGET, show only VALUE by default
-	WithTargetValue bool
-
-	// Do not use colors for old resources. Old resource is the resource
-	// related to old ReplicaSets of Deployment for example
-	IsResourceNew bool
-}
-
+// StringEqualConditionIndicator 字符串相等条件指示器。
 type StringEqualConditionIndicator struct {
 	Value       string
 	TargetValue string
@@ -58,48 +43,19 @@ func (indicator *StringEqualConditionIndicator) IsFailed() bool {
 	return indicator.Value == indicator.FailedValue
 }
 
-func (indicator *StringEqualConditionIndicator) FormatTableElem(prevIndicator *StringEqualConditionIndicator, opts FormatTableElemOptions) string {
-	res := ""
-
-	if opts.ShowProgress && indicator.IsProgressing(prevIndicator) {
-		if !opts.IsResourceNew || opts.DisableWarningColors {
-			res += prevIndicator.Value
-		} else {
-			res += utils.YellowF("%s", prevIndicator.Value)
-		}
-		res += "->"
-	}
-
-	switch {
-	case !opts.IsResourceNew:
-		res += indicator.formatValue(opts.WithTargetValue)
-	case indicator.IsReady():
-		res += utils.GreenF("%s", indicator.formatValue(opts.WithTargetValue))
-	case indicator.IsFailed():
-		if opts.DisableWarningColors {
-			res += indicator.formatValue(opts.WithTargetValue)
-		} else {
-			res += utils.RedF("%s", indicator.formatValue(opts.WithTargetValue))
-		}
-	default:
-		if opts.DisableWarningColors {
-			res += indicator.formatValue(opts.WithTargetValue)
-		} else {
-			res += utils.YellowF("%s", indicator.formatValue(opts.WithTargetValue))
-		}
-	}
-
-	return res
-}
-
 func (indicator *StringEqualConditionIndicator) formatValue(withTargetValue bool) string {
 	if withTargetValue {
 		return fmt.Sprintf("%s (%s)", indicator.Value, indicator.TargetValue)
-	} else {
-		return fmt.Sprintf("%s", indicator.Value)
 	}
+	return fmt.Sprintf("%s", indicator.Value)
 }
 
+// FormatValue 返回 "value (target)" 或 "value" 的可读形式。
+func (indicator *StringEqualConditionIndicator) FormatValue(withTargetValue bool) string {
+	return indicator.formatValue(withTargetValue)
+}
+
+// Int32EqualConditionIndicator int32 相等条件指示器。
 type Int32EqualConditionIndicator struct {
 	Value       int32
 	TargetValue int32
@@ -108,9 +64,8 @@ type Int32EqualConditionIndicator struct {
 func (indicator *Int32EqualConditionIndicator) formatValue(withTargetValue bool) string {
 	if withTargetValue {
 		return fmt.Sprintf("%d/%d", indicator.Value, indicator.TargetValue)
-	} else {
-		return fmt.Sprintf("%d", indicator.Value)
 	}
+	return fmt.Sprintf("%d", indicator.Value)
 }
 
 func (indicator *Int32EqualConditionIndicator) IsProgressing(prevIndicator *Int32EqualConditionIndicator) bool {
@@ -121,35 +76,12 @@ func (indicator *Int32EqualConditionIndicator) IsReady() bool {
 	return indicator.Value == indicator.TargetValue
 }
 
-func (indicator *Int32EqualConditionIndicator) FormatTableElem(prevIndicator *Int32EqualConditionIndicator, opts FormatTableElemOptions) string {
-	res := ""
-
-	if opts.ShowProgress && indicator.IsProgressing(prevIndicator) {
-		if prevIndicator.IsReady() {
-			res += utils.GreenF("%d", prevIndicator.Value)
-		} else {
-			if opts.DisableWarningColors {
-				res += fmt.Sprintf("%d", prevIndicator.Value)
-			} else {
-				res += utils.YellowF("%d", prevIndicator.Value)
-			}
-		}
-		res += "->"
-	}
-
-	if indicator.IsReady() {
-		res += utils.GreenF("%s", indicator.formatValue(opts.WithTargetValue))
-	} else {
-		if opts.DisableWarningColors {
-			res += indicator.formatValue(opts.WithTargetValue)
-		} else {
-			res += utils.YellowF("%s", indicator.formatValue(opts.WithTargetValue))
-		}
-	}
-
-	return res
+// FormatValue 返回 "value/target" 或 "value" 的可读形式。
+func (indicator *Int32EqualConditionIndicator) FormatValue(withTargetValue bool) string {
+	return indicator.formatValue(withTargetValue)
 }
 
+// Int64GreaterOrEqualConditionIndicator int64 大于等于条件指示器。
 type Int64GreaterOrEqualConditionIndicator struct {
 	Value       int64
 	TargetValue int64
@@ -166,40 +98,16 @@ func (indicator *Int64GreaterOrEqualConditionIndicator) IsReady() bool {
 func (indicator *Int64GreaterOrEqualConditionIndicator) formatValue(withTargetValue bool) string {
 	if withTargetValue {
 		return fmt.Sprintf("%d/%d", indicator.Value, indicator.TargetValue)
-	} else {
-		return fmt.Sprintf("%d", indicator.Value)
 	}
+	return fmt.Sprintf("%d", indicator.Value)
 }
 
-func (indicator *Int64GreaterOrEqualConditionIndicator) FormatTableElem(prevIndicator *Int64GreaterOrEqualConditionIndicator, opts FormatTableElemOptions) string {
-	res := ""
-
-	if opts.ShowProgress && indicator.IsProgressing(prevIndicator) {
-		if prevIndicator.IsReady() {
-			res += utils.GreenF("%d", prevIndicator.Value)
-		} else {
-			if opts.DisableWarningColors {
-				res += fmt.Sprintf("%d", prevIndicator.Value)
-			} else {
-				res += utils.YellowF("%d", prevIndicator.Value)
-			}
-		}
-		res += "->"
-	}
-
-	if indicator.IsReady() {
-		res += utils.GreenF("%s", indicator.formatValue(opts.WithTargetValue))
-	} else {
-		if opts.DisableWarningColors {
-			res += indicator.formatValue(opts.WithTargetValue)
-		} else {
-			res += utils.YellowF("%s", indicator.formatValue(opts.WithTargetValue))
-		}
-	}
-
-	return res
+// FormatValue 返回 "value/target" 或 "value" 的可读形式。
+func (indicator *Int64GreaterOrEqualConditionIndicator) FormatValue(withTargetValue bool) string {
+	return indicator.formatValue(withTargetValue)
 }
 
+// Int32MultipleEqualConditionIndicator int32 多值相等条件指示器。
 type Int32MultipleEqualConditionIndicator struct {
 	Value        int32
 	TargetValues []int32
@@ -216,29 +124,4 @@ func (indicator *Int32MultipleEqualConditionIndicator) IsReady() bool {
 
 func (indicator *Int32MultipleEqualConditionIndicator) IsProgressing(prevIndicator *Int32MultipleEqualConditionIndicator) bool {
 	return (prevIndicator != nil) && (indicator.Value != prevIndicator.Value)
-}
-
-func (indicator *Int32MultipleEqualConditionIndicator) FormatTableElem(prevIndicator *Int32MultipleEqualConditionIndicator, opts FormatTableElemOptions) string {
-	res := ""
-
-	if opts.ShowProgress && indicator.IsProgressing(prevIndicator) {
-		if opts.DisableWarningColors {
-			res += fmt.Sprintf("%d", prevIndicator.Value)
-		} else {
-			res += utils.YellowF("%d", prevIndicator.Value)
-		}
-		res += "->"
-	}
-
-	if indicator.IsReady() {
-		res += utils.GreenF("%d", indicator.Value)
-	} else {
-		if opts.DisableWarningColors {
-			res += fmt.Sprintf("%d", indicator.Value)
-		} else {
-			res += utils.YellowF("%d", indicator.Value)
-		}
-	}
-
-	return res
 }

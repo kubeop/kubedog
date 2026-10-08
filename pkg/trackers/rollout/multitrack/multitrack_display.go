@@ -1,7 +1,6 @@
 package multitrack
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"sort"
@@ -10,28 +9,93 @@ import (
 
 	dur "k8s.io/apimachinery/pkg/util/duration"
 
-	"github.com/kubeop/kubedog/pkg/tracker/indicators"
 	"github.com/kubeop/kubedog/pkg/tracker/pod"
 	"github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack/generic"
-	"github.com/kubeop/kubedog/pkg/utils"
-	"github.com/werf/logboek"
-	"github.com/werf/logboek/pkg/style"
-	"github.com/werf/logboek/pkg/types"
 )
 
-var (
-	statusProgressTableRatio    = []float64{.58, .11, .12, .19}
-	statusProgressSubTableRatio = []float64{.40, .15, .20, .25}
-)
-
-// logger 返回本次 multitrack 使用的 logboek logger。
-// 通过 MultitrackOptions.Logger 注入（如写入发布日志系统）；
-// 未注入时回退到进程默认 logger（终端输出），与 kubedog 原行为一致。
-func (mt *multitracker) logger() types.LoggerInterface {
+// logger 返回本次 multitrack 使用的日志接收器。
+// 通过 MultitrackOptions.Logger 注入（如写入 aiops 发布日志系统）；
+// 未注入时回退到 JSON Lines 写 stdout 的默认接收器。
+func (mt *multitracker) logger() LogSink {
 	if mt.opts.Logger != nil {
 		return mt.opts.Logger
 	}
-	return logboek.Context(context.Background())
+	return defaultLogSink
+}
+
+// defaultLogSink 进程级默认接收器，懒初始化，可被 SetDefaultLogSink 替换。
+var defaultLogSink LogSink = NewDefaultLogSink()
+
+// SetDefaultLogSink 设置进程级默认日志接收器（未注入 MultitrackOptions.Logger 时生效）。
+func SetDefaultLogSink(sink LogSink) {
+	if sink != nil {
+		defaultLogSink = sink
+	}
+}
+
+// emit 构造并发出一个事件（内部统一入口，保证字段一致）。
+// namespace 优先取 data["namespace"]；缺失时回查 resourceNamespaces 注册表
+// （Start 时按 resource 前缀注册，覆盖 kind/name 与嵌套 kind/name/po/xxx 两种形态）。
+func (mt *multitracker) emit(t EventType, level Level, resource, message string, data map[string]any) {
+	e := &Event{
+		Time:     time.Now(),
+		Type:     t,
+		Level:    level,
+		Resource: resource,
+		Message:  strings.TrimRight(message, "\n"),
+		Data:     data,
+	}
+	if ns, ok := data["namespace"].(string); ok && ns != "" {
+		e.Namespace = ns
+	} else if ns := mt.lookupNamespace(resource); ns != "" {
+		e.Namespace = ns
+	}
+	mt.logger().WriteEvent(e)
+}
+
+// lookupNamespace 依据 resource 标识查 namespace：
+// 支持 "deploy/name"、"deploy/name/po/xxx" 等，取前两段作为 key。
+func (mt *multitracker) lookupNamespace(resource string) string {
+	if len(mt.resourceNamespaces) == 0 || resource == "" {
+		return ""
+	}
+	parts := strings.SplitN(resource, "/", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	key := parts[0] + "/" + parts[1]
+	return mt.resourceNamespaces[key]
+}
+
+// emitStatus 发出资源状态快照事件。
+func (mt *multitracker) emitStatus(resource string, data map[string]any) {
+	mt.emit(EventResourceStatus, LevelInfo, resource, formatStatusMessage(resource, data), data)
+}
+
+func formatStatusMessage(resource string, data map[string]any) string {
+	var parts []string
+	for _, key := range []string{"status", "replicas", "ready", "uptodate", "available", "active", "succeeded", "failed", "duration", "weight", "condition"} {
+		if v, ok := data[key]; ok && fmt.Sprint(v) != "" && fmt.Sprint(v) != "-" {
+			parts = append(parts, fmt.Sprintf("%s=%v", key, v))
+		}
+	}
+	if len(parts) == 0 {
+		return resource
+	}
+	return fmt.Sprintf("%s (%s)", resource, strings.Join(parts, " "))
+}
+
+// emitLog 发出容器日志事件（多行合并为单个事件，行序保留在 data.lines）。
+func (mt *multitracker) emitLog(resource, podName, containerName string, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	msg := strings.Join(lines, "\n")
+	mt.emit(EventResourceLog, LevelInfo, resource, msg, map[string]any{
+		"pod":       podName,
+		"container": containerName,
+		"lines":     lines,
+	})
 }
 
 func (mt *multitracker) displayResourceLogChunk(resourceKind string, spec MultitrackSpec, header string, chunk *pod.ContainerLogChunk) {
@@ -57,8 +121,8 @@ func (mt *multitracker) displayResourceLogChunk(resourceKind string, spec Multit
 	}
 
 	var logRegexp *regexp.Regexp
-	if spec.LogRegexByContainerName[chunk.ContainerName] != nil {
-		logRegexp = spec.LogRegexByContainerName[chunk.ContainerName]
+	if r := spec.LogRegexByContainerName[chunk.ContainerName]; r != nil {
+		logRegexp = r
 	} else if spec.LogRegex != nil {
 		logRegexp = spec.LogRegex
 	}
@@ -79,41 +143,24 @@ func (mt *multitracker) displayResourceLogChunk(resourceKind string, spec Multit
 	}
 
 	if len(showLines) > 0 {
-		mt.setLogProcess(fmt.Sprintf("%s/%s %s logs", resourceKind, spec.ResourceName, header), func(options types.LogProcessOptionsInterface) {
-			options.WithoutElapsedTime()
-		})
-
-		for _, line := range showLines {
-			mt.logger().LogF("%s\n", line)
-		}
+		// header 形如 "po/mypod-abc container/app"，解析出 pod 与容器名
+		podName, containerName := parsePodContainerHeader(header)
+		mt.emitLog(fmt.Sprintf("%s/%s", resourceKind, spec.ResourceName), podName, containerName, showLines)
 	}
 }
 
-func (mt *multitracker) setLogProcess(header string, optionsFunc func(types.LogProcessOptionsInterface)) {
-	if mt.currentLogProcessHeader != header {
-		mt.resetLogProcess()
-
-		logProcess := mt.logger().Default().LogProcess(header)
-
-		if optionsFunc != nil {
-			logProcess.Options(optionsFunc)
+// parsePodContainerHeader 解析 "po/xxx container/yyy" 形式的 header。
+func parsePodContainerHeader(header string) (podName, containerName string) {
+	fields := strings.Fields(header)
+	for _, f := range fields {
+		if strings.HasPrefix(f, "po/") {
+			podName = strings.TrimPrefix(f, "po/")
 		}
-
-		logProcess.Start()
-
-		mt.currentLogProcessHeader = header
-		mt.currentLogProcess = logProcess
+		if strings.HasPrefix(f, "container/") {
+			containerName = strings.TrimPrefix(f, "container/")
+		}
 	}
-}
-
-func (mt *multitracker) resetLogProcess() {
-	mt.displayCalled = true
-
-	if mt.currentLogProcess != nil {
-		mt.currentLogProcess.End()
-		mt.currentLogProcess = nil
-		mt.currentLogProcessHeader = ""
-	}
+	return podName, containerName
 }
 
 func (mt *multitracker) displayResourceTrackerMessageF(resourceKind, resourceName string, showServiceMessages bool, format string, a ...interface{}) {
@@ -122,15 +169,7 @@ func (mt *multitracker) displayResourceTrackerMessageF(resourceKind, resourceNam
 	mt.serviceMessagesByResource[resource] = append(mt.serviceMessagesByResource[resource], msg)
 
 	if showServiceMessages {
-		mt.setLogProcess(
-			fmt.Sprintf("%s/%s service messages", resourceKind, resourceName),
-			func(options types.LogProcessOptionsInterface) {
-				options.Style(style.Details())
-				options.WithoutElapsedTime()
-			},
-		)
-
-		mt.logger().Default().LogFDetails("%s\n", msg)
+		mt.emit(EventResourceServiceMessage, LevelInfo, resource, msg, nil)
 	}
 }
 
@@ -140,499 +179,320 @@ func (mt *multitracker) displayResourceEventF(resourceKind, resourceName string,
 	mt.serviceMessagesByResource[resource] = append(mt.serviceMessagesByResource[resource], msg)
 
 	if showServiceMessages {
-		mt.setLogProcess(
-			fmt.Sprintf("%s/%s service messages", resourceKind, resourceName),
-			func(options types.LogProcessOptionsInterface) {
-				options.Style(style.Details())
-				options.WithoutElapsedTime()
-			},
-		)
-
-		mt.logger().Default().LogFDetails("%s\n", msg)
+		mt.emit(EventResourceEvent, LevelInfo, resource, msg, nil)
 	}
 }
 
 func (mt *multitracker) displayResourceErrorF(resourceKind, resourceName, format string, a ...interface{}) {
-	mt.resetLogProcess()
-	mt.logger().Warn().LogF(fmt.Sprintf("%s/%s ERROR: %s\n", resourceKind, resourceName, format), a...)
+	resource := fmt.Sprintf("%s/%s", resourceKind, resourceName)
+	mt.emit(EventResourceError, LevelError, resource, fmt.Sprintf(format, a...), nil)
 }
 
 func (mt *multitracker) displayFailedTrackingResourcesServiceMessages() {
+	var parts []string
+
 	for name, state := range mt.TrackingDeployments {
 		if state.Status != resourceFailed {
 			continue
 		}
-
-		spec := mt.DeploymentsSpecs[name]
-		mt.displayResourceServiceMessages("deploy", spec.ResourceName)
+		parts = append(parts, mt.collectResourceServiceMessages("deploy", name)...)
 	}
 	for name, state := range mt.TrackingStatefulSets {
 		if state.Status != resourceFailed {
 			continue
 		}
-
-		spec := mt.StatefulSetsSpecs[name]
-		mt.displayResourceServiceMessages("sts", spec.ResourceName)
+		parts = append(parts, mt.collectResourceServiceMessages("sts", name)...)
 	}
 	for name, state := range mt.TrackingDaemonSets {
 		if state.Status != resourceFailed {
 			continue
 		}
-
-		spec := mt.DaemonSetsSpecs[name]
-		mt.displayResourceServiceMessages("ds", spec.ResourceName)
+		parts = append(parts, mt.collectResourceServiceMessages("ds", name)...)
 	}
 	for name, state := range mt.TrackingJobs {
 		if state.Status != resourceFailed {
 			continue
 		}
-
-		spec := mt.JobsSpecs[name]
-		mt.displayResourceServiceMessages("job", spec.ResourceName)
+		parts = append(parts, mt.collectResourceServiceMessages("job", name)...)
 	}
-
+	for name, state := range mt.TrackingCanaries {
+		if state.Status != resourceFailed {
+			continue
+		}
+		parts = append(parts, mt.collectResourceServiceMessages("canary", name)...)
+	}
 	for _, res := range mt.GenericResources {
 		if res.State.ResourceState() != generic.ResourceStateFailed {
 			continue
 		}
+		parts = append(parts, mt.collectResourceServiceMessages(res.Spec.GroupVersionKindNamespaceString(), res.Spec.Name)...)
+	}
 
-		mt.displayResourceServiceMessages(res.Spec.GroupVersionKindNamespaceString(), res.Spec.Name)
+	if len(parts) > 0 {
+		mt.emit(EventTrackingSummary, LevelError, "", strings.Join(parts, "\n"), map[string]any{
+			"failedResources": parts,
+		})
 	}
 }
 
-func (mt *multitracker) displayResourceServiceMessages(resourceKind, resourceName string) {
-	lines := mt.serviceMessagesByResource[fmt.Sprintf("%s/%s", resourceKind, resourceName)]
-
-	if len(lines) > 0 {
-		mt.resetLogProcess()
-
-		mt.logger().LogOptionalLn()
-
-		mt.logger().Default().LogBlock("Failed resource %s/%s service messages", resourceKind, resourceName).
-			Options(func(options types.LogBlockOptionsInterface) {
-				options.WithoutLogOptionalLn()
-				options.Style(style.Details())
-			}).
-			Do(func() {
-				for _, line := range lines {
-					mt.logger().Default().LogFDetails("%s\n", line)
-				}
-			})
-
-		mt.logger().LogOptionalLn()
-	}
+// collectResourceServiceMessages 收集某资源累积的服务消息（不输出）。
+func (mt *multitracker) collectResourceServiceMessages(resourceKind, resourceName string) []string {
+	return mt.serviceMessagesByResource[fmt.Sprintf("%s/%s", resourceKind, resourceName)]
 }
 
 func (mt *multitracker) displayMultitrackServiceMessageF(format string, a ...interface{}) {
-	mt.resetLogProcess()
-	mt.logger().Default().LogFHighlight(format, a...)
+	mt.emit(EventResourceServiceMessage, LevelInfo, "", fmt.Sprintf(format, a...), nil)
 }
 
 func (mt *multitracker) displayStatusProgress() error {
-	displayLn := false
-	if mt.displayCalled {
-		displayLn = true
-	}
-
-	mt.resetLogProcess()
-
-	if displayLn {
-		mt.logger().LogOptionalLn()
-	}
-
-	caption := utils.BoldF("Status progress")
-
-	mt.logger().Default().LogBlock(caption).
-		Options(func(options types.LogBlockOptionsInterface) {
-			options.WithoutLogOptionalLn()
-		}).
-		Do(func() {
-			mt.displayDeploymentsStatusProgress()
-			mt.displayDaemonSetsStatusProgress()
-			mt.displayStatefulSetsStatusProgress()
-			mt.displayJobsProgress()
-			mt.displayCanariesProgress()
-			mt.displayGenericsStatusProgress()
-		})
-
-	mt.logger().LogOptionalLn()
-
+	mt.emitDeploymentsStatusProgress()
+	mt.emitDaemonSetsStatusProgress()
+	mt.emitStatefulSetsStatusProgress()
+	mt.emitJobsProgress()
+	mt.emitCanariesProgress()
+	mt.emitGenericsStatusProgress()
 	return nil
 }
 
-func (mt *multitracker) displayCanariesProgress() {
-	t := utils.NewTable(statusProgressTableRatio...)
-	t.SetWidth(mt.logger().Streams().ContentWidth() - 1)
-	t.Header("CANARY", "STATUS", "WEIGHT", "LASTUPDATE")
-
+func (mt *multitracker) emitCanariesProgress() {
 	resourcesNames := []string{}
 	for name := range mt.CanariesSpecs {
 		resourcesNames = append(resourcesNames, name)
 	}
 	sort.Strings(resourcesNames)
 
-	var tableChangesCount int
 	for _, name := range resourcesNames {
 		status := mt.CanariesStatuses[name]
-
 		spec := mt.CanariesSpecs[name]
-		resource := formatResourceCaption(name, spec.FailMode, status.IsSucceeded, status.IsFailed, true)
+		resource := fmt.Sprintf("canary/%s", name)
+
+		data := map[string]any{
+			"namespace": spec.Namespace,
+			"isReady":   status.IsSucceeded,
+			"isFailed":  status.IsFailed,
+			"weight":    status.CanaryWeight,
+			"lastUpdate": status.LastTransitionTime,
+		}
 
 		if status.IsFailed {
-			tableChangesCount++
-			t.Row(resource, status.FailedReason, status.CanaryWeight, status.LastTransitionTime)
+			data["status"] = "Failed"
+			data["error"] = status.FailedReason
+			mt.emit(EventResourceStatus, LevelError, resource, fmt.Sprintf("%s failed: %s", resource, status.FailedReason), data)
 		} else {
-			tableChangesCount++
-			t.Row(resource, status.CanaryStatus.Phase, status.CanaryWeight, status.LastTransitionTime)
+			data["status"] = status.CanaryStatus.Phase
+			mt.emitStatus(resource, data)
 		}
-	}
-
-	if tableChangesCount > 0 {
-		mt.logger().Log(t.Render())
 	}
 }
 
-func (mt *multitracker) displayJobsProgress() {
-	t := utils.NewTable(statusProgressTableRatio...)
-	t.SetWidth(mt.logger().Streams().ContentWidth() - 1)
-	t.Header("JOB", "ACTIVE", "DURATION", "SUCCEEDED/FAILED")
-
+func (mt *multitracker) emitJobsProgress() {
 	resourcesNames := []string{}
 	for name := range mt.JobsSpecs {
 		resourcesNames = append(resourcesNames, name)
 	}
 	sort.Strings(resourcesNames)
 
-	var tableChangesCount int
 	for _, name := range resourcesNames {
 		prevStatus := mt.PrevJobsStatuses[name]
 		status := mt.JobsStatuses[name]
-
 		spec := mt.JobsSpecs[name]
+		resource := fmt.Sprintf("job/%s", name)
 
 		if stillSucceeded := prevStatus.IsSucceeded && status.IsSucceeded; stillSucceeded {
 			continue
 		}
 
-		showProgress := status.StatusGeneration > prevStatus.StatusGeneration
-		disableWarningColors := spec.FailMode == IgnoreAndContinueDeployProcess
+		data := mt.buildControllerStatusData("job", spec, status.IsSucceeded, status.IsFailed, status.FailedReason)
 
-		resource := formatResourceCaption(name, spec.FailMode, status.IsSucceeded, status.IsFailed, true)
-
-		succeeded := "-"
+		data["active"] = status.Active
+		data["succeeded"] = "-"
 		if status.SucceededIndicator != nil {
-			succeeded = status.SucceededIndicator.FormatTableElem(prevStatus.SucceededIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["succeeded"] = plainIndicatorValue(status.SucceededIndicator.Value)
 		}
+		data["failed"] = status.Failed
 
-		var duration string
 		switch {
 		case status.JobStatus.StartTime == nil:
 		case status.JobStatus.CompletionTime == nil:
-			duration = dur.HumanDuration(time.Since(status.JobStatus.StartTime.Time))
+			data["duration"] = dur.HumanDuration(time.Since(status.JobStatus.StartTime.Time))
 		default:
-			duration = dur.HumanDuration(status.JobStatus.CompletionTime.Sub(status.JobStatus.StartTime.Time))
+			data["duration"] = dur.HumanDuration(status.JobStatus.CompletionTime.Sub(status.JobStatus.StartTime.Time))
 		}
 
-		if status.IsFailed {
-			tableChangesCount++
-			t.Row(resource, status.Active, duration, strings.Join([]string{succeeded, fmt.Sprintf("%d", status.Failed)}, "/"), formatResourceError(disableWarningColors, status.FailedReason))
-		} else {
-			tableChangesCount++
-			t.Row(resource, status.Active, duration, strings.Join([]string{succeeded, fmt.Sprintf("%d", status.Failed)}, "/"))
-		}
+		level := statusLevel(status.IsFailed, status.IsSucceeded)
+		mt.emit(EventResourceStatus, level, resource, formatStatusMessage(resource, data), data)
 
-		if len(status.Pods) > 0 {
-			newPodsNames := []string{}
-			for podName := range status.Pods {
-				newPodsNames = append(newPodsNames, podName)
-			}
-
-			st, podTableChangesCount := mt.displayChildPodsStatusProgress(&t, prevStatus.Pods, status.Pods, newPodsNames, spec.FailMode, showProgress, disableWarningColors)
-			tableChangesCount += podTableChangesCount
-
-			extraMsg := ""
-			if len(status.WaitingForMessages) > 0 {
-				tableChangesCount++
-				extraMsg += "---\n"
-				extraMsg += utils.BlueF("Waiting for: %s", strings.Join(status.WaitingForMessages, ", "))
-			}
-			st.Commit(extraMsg)
-		}
+		mt.emitChildPodsProgress(resource, prevStatus.Pods, status.Pods, status.WaitingForMessages)
 
 		mt.PrevJobsStatuses[name] = status
 	}
+}
 
-	if tableChangesCount > 0 {
-		mt.logger().Log(t.Render())
+// buildControllerStatusData 组装控制器类资源（deploy/sts/ds/job）公共状态字段。
+func (mt *multitracker) buildControllerStatusData(kind string, spec MultitrackSpec, isReady, isFailed bool, failedReason string) map[string]any {
+	data := map[string]any{
+		"namespace": spec.Namespace,
+		"isReady":   isReady,
+		"isFailed":  isFailed,
+	}
+	if isFailed && failedReason != "" {
+		data["error"] = failedReason
+	}
+	return data
+}
+
+func statusLevel(isFailed, isReady bool) Level {
+	switch {
+	case isFailed:
+		return LevelError
+	case isReady:
+		return LevelInfo
+	default:
+		return LevelInfo
 	}
 }
 
-func (mt *multitracker) displayStatefulSetsStatusProgress() {
-	t := utils.NewTable(statusProgressTableRatio...)
-	t.SetWidth(mt.logger().Streams().ContentWidth() - 1)
-	t.Header("STATEFULSET", "REPLICAS", "READY", "UP-TO-DATE")
+func plainIndicatorValue(v any) string {
+	return fmt.Sprint(v)
+}
 
+func (mt *multitracker) emitStatefulSetsStatusProgress() {
 	resourcesNames := []string{}
 	for name := range mt.StatefulSetsSpecs {
 		resourcesNames = append(resourcesNames, name)
 	}
 	sort.Strings(resourcesNames)
 
-	var tableChangesCount int
 	for _, name := range resourcesNames {
 		prevStatus := mt.PrevStatefulSetsStatuses[name]
 		status := mt.StatefulSetsStatuses[name]
-
 		spec := mt.StatefulSetsSpecs[name]
+		resource := fmt.Sprintf("sts/%s", name)
 
 		if stillDeployed := prevStatus.IsReady && status.IsReady; stillDeployed {
 			continue
 		}
 
-		showProgress := status.StatusGeneration > prevStatus.StatusGeneration
-		disableWarningColors := spec.FailMode == IgnoreAndContinueDeployProcess
+		data := mt.buildControllerStatusData("sts", spec, status.IsReady, status.IsFailed, status.FailedReason)
 
-		resource := formatResourceCaption(name, spec.FailMode, status.IsReady, status.IsFailed, true)
-
-		replicas := "-"
+		data["replicas"] = "-"
 		if status.ReplicasIndicator != nil {
-			replicas = status.ReplicasIndicator.FormatTableElem(prevStatus.ReplicasIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-				WithTargetValue:      true,
-			})
+			data["replicas"] = fmt.Sprintf("%d/%d", status.ReplicasIndicator.Value, status.ReplicasIndicator.TargetValue)
 		}
-
-		ready := "-"
+		data["ready"] = "-"
 		if status.ReadyIndicator != nil {
-			ready = status.ReadyIndicator.FormatTableElem(prevStatus.ReadyIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["ready"] = fmt.Sprintf("%d/%d", status.ReadyIndicator.Value, status.ReadyIndicator.TargetValue)
 		}
-
-		uptodate := "-"
+		data["uptodate"] = "-"
 		if status.UpToDateIndicator != nil {
-			uptodate = status.UpToDateIndicator.FormatTableElem(prevStatus.UpToDateIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["uptodate"] = fmt.Sprintf("%d/%d", status.UpToDateIndicator.Value, status.UpToDateIndicator.TargetValue)
+		}
+		for _, w := range status.WarningMessages {
+			data["warning"] = w
 		}
 
-		if status.IsFailed {
-			tableChangesCount++
-			t.Row(resource, replicas, ready, uptodate, formatResourceError(disableWarningColors, status.FailedReason))
-		} else {
-			args := []interface{}{}
-			args = append(args, resource, replicas, ready, uptodate)
-			for _, w := range status.WarningMessages {
-				args = append(args, formatResourceWarning(disableWarningColors, w))
-			}
-			tableChangesCount++
-			t.Row(args...)
-		}
+		mt.emit(EventResourceStatus, statusLevel(status.IsFailed, status.IsReady), resource, formatStatusMessage(resource, data), data)
 
-		if len(status.Pods) > 0 {
-			st, podTableChangesCount := mt.displayChildPodsStatusProgress(&t, prevStatus.Pods, status.Pods, status.NewPodsNames, spec.FailMode, showProgress, disableWarningColors)
-			tableChangesCount += podTableChangesCount
-			extraMsg := ""
-			if len(status.WaitingForMessages) > 0 {
-				tableChangesCount++
-				extraMsg += "---\n"
-				extraMsg += utils.BlueF("Waiting for: %s", strings.Join(status.WaitingForMessages, ", "))
-			}
-			st.Commit(extraMsg)
-		}
+		mt.emitChildPodsProgress(resource, prevStatus.Pods, status.Pods, status.WaitingForMessages)
 
 		mt.PrevStatefulSetsStatuses[name] = status
 	}
-
-	if tableChangesCount > 0 {
-		mt.logger().Log(t.Render())
-	}
 }
 
-func (mt *multitracker) displayDaemonSetsStatusProgress() {
-	t := utils.NewTable(statusProgressTableRatio...)
-	t.SetWidth(mt.logger().Streams().ContentWidth() - 1)
-	t.Header("DAEMONSET", "REPLICAS", "AVAILABLE", "UP-TO-DATE")
-
+func (mt *multitracker) emitDaemonSetsStatusProgress() {
 	resourcesNames := []string{}
 	for name := range mt.DaemonSetsSpecs {
 		resourcesNames = append(resourcesNames, name)
 	}
 	sort.Strings(resourcesNames)
 
-	var tableChangesCount int
 	for _, name := range resourcesNames {
 		prevStatus := mt.PrevDaemonSetsStatuses[name]
 		status := mt.DaemonSetsStatuses[name]
-
 		spec := mt.DaemonSetsSpecs[name]
+		resource := fmt.Sprintf("ds/%s", name)
 
 		if stillDeployed := prevStatus.IsReady && status.IsReady; stillDeployed {
 			continue
 		}
 
-		showProgress := status.StatusGeneration > prevStatus.StatusGeneration
-		disableWarningColors := spec.FailMode == IgnoreAndContinueDeployProcess
+		data := mt.buildControllerStatusData("ds", spec, status.IsReady, status.IsFailed, status.FailedReason)
 
-		resource := formatResourceCaption(name, spec.FailMode, status.IsReady, status.IsFailed, true)
-
-		replicas := "-"
+		data["replicas"] = "-"
 		if status.ReplicasIndicator != nil {
-			replicas = status.ReplicasIndicator.FormatTableElem(prevStatus.ReplicasIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-				WithTargetValue:      true,
-			})
+			data["replicas"] = fmt.Sprintf("%d/%d", status.ReplicasIndicator.Value, status.ReplicasIndicator.TargetValue)
 		}
-
-		available := "-"
+		data["available"] = "-"
 		if status.AvailableIndicator != nil {
-			available = status.AvailableIndicator.FormatTableElem(prevStatus.AvailableIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["available"] = fmt.Sprintf("%d/%d", status.AvailableIndicator.Value, status.AvailableIndicator.TargetValue)
 		}
-
-		uptodate := "-"
+		data["uptodate"] = "-"
 		if status.UpToDateIndicator != nil {
-			uptodate = status.UpToDateIndicator.FormatTableElem(prevStatus.UpToDateIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["uptodate"] = fmt.Sprintf("%d/%d", status.UpToDateIndicator.Value, status.UpToDateIndicator.TargetValue)
 		}
 
-		if status.IsFailed {
-			tableChangesCount++
-			t.Row(resource, replicas, available, uptodate, formatResourceError(disableWarningColors, status.FailedReason))
-		} else {
-			tableChangesCount++
-			t.Row(resource, replicas, available, uptodate)
-		}
+		mt.emit(EventResourceStatus, statusLevel(status.IsFailed, status.IsReady), resource, formatStatusMessage(resource, data), data)
 
-		if len(status.Pods) > 0 {
-			st, podTableChangesCount := mt.displayChildPodsStatusProgress(&t, prevStatus.Pods, status.Pods, status.NewPodsNames, spec.FailMode, showProgress, disableWarningColors)
-			tableChangesCount += podTableChangesCount
-			extraMsg := ""
-			if len(status.WaitingForMessages) > 0 {
-				tableChangesCount++
-				extraMsg += "---\n"
-				extraMsg += utils.BlueF("Waiting for: %s", strings.Join(status.WaitingForMessages, ", "))
-			}
-			st.Commit(extraMsg)
-		}
+		mt.emitChildPodsProgress(resource, prevStatus.Pods, status.Pods, status.WaitingForMessages)
 
 		mt.PrevDaemonSetsStatuses[name] = status
 	}
-
-	if tableChangesCount > 0 {
-		mt.logger().Log(t.Render())
-	}
 }
 
-func (mt *multitracker) displayDeploymentsStatusProgress() {
-	t := utils.NewTable(statusProgressTableRatio...)
-	t.SetWidth(mt.logger().Streams().ContentWidth() - 1)
-	t.Header("DEPLOYMENT", "REPLICAS", "AVAILABLE", "UP-TO-DATE")
-
+func (mt *multitracker) emitDeploymentsStatusProgress() {
 	resourcesNames := []string{}
 	for name := range mt.DeploymentsSpecs {
 		resourcesNames = append(resourcesNames, name)
 	}
 	sort.Strings(resourcesNames)
 
-	var tableChangesCount int
 	for _, name := range resourcesNames {
 		prevStatus := mt.PrevDeploymentsStatuses[name]
 		status := mt.DeploymentsStatuses[name]
 		spec := mt.DeploymentsSpecs[name]
+		resource := fmt.Sprintf("deploy/%s", name)
 
 		if stillDeployed := prevStatus.IsReady && status.IsReady; stillDeployed {
 			continue
 		}
 
-		showProgress := status.StatusGeneration > prevStatus.StatusGeneration
-		disableWarningColors := spec.FailMode == IgnoreAndContinueDeployProcess
+		data := mt.buildControllerStatusData("deploy", spec, status.IsReady, status.IsFailed, status.FailedReason)
 
-		resource := formatResourceCaption(name, spec.FailMode, status.IsReady, status.IsFailed, true)
-
-		replicas := "-"
+		data["replicas"] = "-"
 		if status.ReplicasIndicator != nil {
-			replicas = status.ReplicasIndicator.FormatTableElem(prevStatus.ReplicasIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-				WithTargetValue:      true,
-			})
+			data["replicas"] = fmt.Sprintf("%d/%d", status.ReplicasIndicator.Value, status.ReplicasIndicator.TargetValue)
 		}
-
-		available := "-"
+		data["available"] = "-"
 		if status.AvailableIndicator != nil {
-			available = status.AvailableIndicator.FormatTableElem(prevStatus.AvailableIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["available"] = fmt.Sprintf("%d/%d", status.AvailableIndicator.Value, status.AvailableIndicator.TargetValue)
 		}
-
-		uptodate := "-"
+		data["uptodate"] = "-"
 		if status.UpToDateIndicator != nil {
-			uptodate = status.UpToDateIndicator.FormatTableElem(prevStatus.UpToDateIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-			})
+			data["uptodate"] = fmt.Sprintf("%d/%d", status.UpToDateIndicator.Value, status.UpToDateIndicator.TargetValue)
 		}
 
-		if status.IsFailed {
-			tableChangesCount++
-			t.Row(resource, replicas, available, uptodate, formatResourceError(disableWarningColors, status.FailedReason))
-		} else {
-			tableChangesCount++
-			t.Row(resource, replicas, available, uptodate)
-		}
+		mt.emit(EventResourceStatus, statusLevel(status.IsFailed, status.IsReady), resource, formatStatusMessage(resource, data), data)
 
-		if len(status.Pods) > 0 {
-			st, podTableChangesCount := mt.displayChildPodsStatusProgress(&t, prevStatus.Pods, status.Pods, status.NewPodsNames, spec.FailMode, showProgress, disableWarningColors)
-			tableChangesCount += podTableChangesCount
-			extraMsg := ""
-			if len(status.WaitingForMessages) > 0 {
-				tableChangesCount++
-				extraMsg += "---\n"
-				extraMsg += utils.BlueF("Waiting for: %s", strings.Join(status.WaitingForMessages, ", "))
-			}
-			st.Commit(extraMsg)
-		}
+		mt.emitChildPodsProgress(resource, prevStatus.Pods, status.Pods, status.WaitingForMessages)
 
 		mt.PrevDeploymentsStatuses[name] = status
 	}
-
-	if tableChangesCount > 0 {
-		mt.logger().Log(t.Render())
-	}
 }
 
-func (mt *multitracker) displayGenericsStatusProgress() {
-	t := utils.NewTable([]float64{.43, .14, .43}...)
-	t.SetWidth(mt.logger().Streams().ContentWidth() - 1)
-	t.Header("RESOURCE", "NAMESPACE", "WATCHING FOR FIELD")
-
-	var tableChangesCount int
+func (mt *multitracker) emitGenericsStatusProgress() {
 	for _, resource := range mt.GenericResources {
-		var namespace string
-		if resource.Spec.Namespace != "" {
-			namespace = resource.Spec.Namespace
-		} else {
-			namespace = "-"
+		res := fmt.Sprintf("%s", resource.Spec.ResourceID)
+
+		data := map[string]any{
+			"namespace": resource.Spec.Namespace,
+			"isReady":   false,
+			"isFailed":  false,
 		}
 
 		lastStatus := resource.State.LastStatus()
 		if lastStatus == nil {
-			resourceCaption := formatGenericResourceCaption(resource.Spec.ResourceID.KindNameString(), resource.Spec.FailMode, false, false, true)
-			tableChangesCount++
-			t.Row(resourceCaption, namespace, "-")
+			data["condition"] = "-"
+			mt.emitStatus(res, data)
 			continue
 		}
 
@@ -642,86 +502,46 @@ func (mt *multitracker) displayGenericsStatusProgress() {
 			continue
 		}
 
-		var showProgress bool
-		if lastPrintedStatus != nil {
-			showProgress = lastPrintedStatus.DiffersFrom(lastStatus)
-		} else {
-			showProgress = true
-		}
-
-		resourceCaption := formatGenericResourceCaption(resource.Spec.ResourceID.KindNameString(), resource.Spec.FailMode, lastStatus.IsReady(), lastStatus.IsFailed(), true)
-
-		var lastPrintedStatusIndicator *indicators.StringEqualConditionIndicator
-		if lastPrintedStatus != nil {
-			lastPrintedStatusIndicator = lastPrintedStatus.Indicator
-		}
-
-		disableWarningColors := resource.Spec.FailMode == generic.IgnoreAndContinueDeployProcess
-
-		var currentAndDesiredState string
-		if lastStatus.Indicator != nil {
-			if lastStatus.IsFailed() && lastStatus.Indicator.FailedValue == "" {
-				currentAndDesiredState = "-"
-			} else {
-				currentAndDesiredState = lastStatus.Indicator.FormatTableElem(lastPrintedStatusIndicator, indicators.FormatTableElemOptions{
-					ShowProgress:         showProgress,
-					DisableWarningColors: disableWarningColors,
-					WithTargetValue:      false,
-				})
-			}
-		} else {
-			currentAndDesiredState = "-"
-		}
+		data["isReady"] = lastStatus.IsReady()
+		data["isFailed"] = lastStatus.IsFailed()
 
 		var condition string
-		if lastStatus.HumanConditionPath() != "" {
-			condition = fmt.Sprintf("%s: %s", lastStatus.HumanConditionPath(), currentAndDesiredState)
+		if lastStatus.Indicator != nil {
+			if lastStatus.IsFailed() && lastStatus.Indicator.FailedValue == "" {
+				condition = "-"
+			} else {
+				condition = fmt.Sprintf("%s (target: %s)", lastStatus.Indicator.Value, lastStatus.Indicator.TargetValue)
+			}
 		} else {
 			condition = "-"
 		}
 
-		tableChangesCount++
-		if lastStatus.IsFailed() && lastStatus.FailureReason() != "" {
-			t.Row(resourceCaption, namespace, condition, formatResourceError(disableWarningColors, lastStatus.FailureReason()))
+		if lastStatus.HumanConditionPath() != "" {
+			data["condition"] = fmt.Sprintf("%s: %s", lastStatus.HumanConditionPath(), condition)
 		} else {
-			t.Row(resourceCaption, namespace, condition)
+			data["condition"] = condition
+		}
+
+		if lastStatus.IsFailed() && lastStatus.FailureReason() != "" {
+			data["error"] = lastStatus.FailureReason()
+			mt.emit(EventResourceStatus, LevelError, res, fmt.Sprintf("%s failed: %s", res, lastStatus.FailureReason()), data)
+		} else {
+			mt.emitStatus(res, data)
 		}
 
 		resource.State.SetLastPrintedStatus(lastStatus)
 	}
-
-	if tableChangesCount > 0 {
-		mt.logger().Log(t.Render())
-	}
 }
 
-func (mt *multitracker) displayChildPodsStatusProgress(t *utils.Table, prevPods, pods map[string]pod.PodStatus, newPodsNames []string, failMode FailMode, showProgress, disableWarningColors bool) (st *utils.Table, tableChangesCount int) {
-	{
-		subT := t.SubTable(statusProgressSubTableRatio...)
-		st = &subT
-	}
-
-	st.Header("POD", "READY", "RESTARTS", "STATUS")
-
-	podsNames := []string{}
+// emitChildPodsProgress 为控制器资源发出子 Pod 状态事件。
+func (mt *multitracker) emitChildPodsProgress(parentResource string, prevPods, pods map[string]pod.PodStatus, waitingForMessages []string) {
+	podsNames := make([]string, 0, len(pods))
 	for podName := range pods {
 		podsNames = append(podsNames, podName)
 	}
 	sort.Strings(podsNames)
 
-	var podRows [][]interface{}
-
 	for _, podName := range podsNames {
-		var podRow []interface{}
-
-		isPodNew := false
-		for _, newPodName := range newPodsNames {
-			if newPodName == podName {
-				isPodNew = true
-			}
-		}
-
-		prevPodStatus := prevPods[podName]
 		podStatus := pods[podName]
 
 		isReady := false
@@ -729,118 +549,38 @@ func (mt *multitracker) displayChildPodsStatusProgress(t *utils.Table, prevPods,
 			isReady = podStatus.StatusIndicator.IsReady()
 		}
 
-		resource := formatResourceCaption(strings.Join(strings.Split(podName, "-")[1:], "-"), failMode, isReady, podStatus.IsFailed, isPodNew)
+		data := map[string]any{
+			"parent":   parentResource,
+			"isReady":  isReady,
+			"isFailed": podStatus.IsFailed,
+			"ready":    fmt.Sprintf("%d/%d", podStatus.ReadyContainers, podStatus.TotalContainers),
+			"restarts": podStatus.Restarts,
+		}
 
-		ready := fmt.Sprintf("%d/%d", podStatus.ReadyContainers, podStatus.TotalContainers)
-
-		status := "-"
 		if podStatus.StatusIndicator != nil {
-			status = podStatus.StatusIndicator.FormatTableElem(prevPodStatus.StatusIndicator, indicators.FormatTableElemOptions{
-				ShowProgress:         showProgress,
-				DisableWarningColors: disableWarningColors,
-				IsResourceNew:        isPodNew,
-			})
+			data["status"] = podStatus.StatusIndicator.Value
+		} else {
+			data["status"] = "-"
 		}
 
-		podRow = append(podRow, resource, ready, podStatus.Restarts, status)
+		podResource := fmt.Sprintf("%s/po/%s", parentResource, podName)
+
 		if podStatus.IsFailed {
-			podRow = append(podRow, formatResourceError(disableWarningColors, podStatus.FailedReason))
-		}
-
-		podRows = append(podRows, podRow)
-	}
-
-	st.Rows(podRows...)
-
-	return st, len(podRows)
-}
-
-func formatResourceWarning(disableWarningColors bool, reason string) string {
-	msg := fmt.Sprintf("warning: %s", reason)
-	if disableWarningColors {
-		return msg
-	}
-	return utils.YellowF("%s", msg)
-}
-
-func formatResourceError(disableWarningColors bool, reason string) string {
-	msg := fmt.Sprintf("error: %s", reason)
-	if disableWarningColors {
-		return msg
-	}
-	return utils.RedF("%s", msg)
-}
-
-func formatResourceCaption(resourceCaption string, resourceFailMode FailMode, isReady, isFailed, isNew bool) string {
-	if !isNew {
-		return resourceCaption
-	}
-
-	switch resourceFailMode {
-	case FailWholeDeployProcessImmediately:
-		switch {
-		case isReady:
-			return utils.GreenF("%s", resourceCaption)
-		case isFailed:
-			return utils.RedF("%s", resourceCaption)
-		default:
-			return utils.YellowF("%s", resourceCaption)
-		}
-
-	case IgnoreAndContinueDeployProcess:
-		if isReady {
-			return utils.GreenF("%s", resourceCaption)
+			data["error"] = podStatus.FailedReason
+			mt.emit(EventResourceStatus, LevelError, podResource, fmt.Sprintf("%s failed: %s", podResource, podStatus.FailedReason), data)
 		} else {
-			return resourceCaption
+			mt.emitStatus(podResource, data)
 		}
+	}
 
-	case LegacyHopeUntilEndOfDeployProcess:
-		if isReady {
-			return utils.GreenF("%s", resourceCaption)
-		} else {
-			return utils.YellowF("%s", resourceCaption)
-		}
-
-	default:
-		panic(fmt.Sprintf("unsupported resource fail mode '%s'", resourceFailMode))
+	if len(waitingForMessages) > 0 {
+		mt.emit(EventResourceStatus, LevelInfo, parentResource, fmt.Sprintf("%s waiting for: %s", parentResource, strings.Join(waitingForMessages, ", ")), map[string]any{
+			"waitingFor": waitingForMessages,
+		})
 	}
 }
 
-func formatGenericResourceCaption(resourceCaption string, resourceFailMode generic.FailMode, isReady, isFailed, isNew bool) string {
-	if !isNew {
-		return resourceCaption
-	}
-
-	switch resourceFailMode {
-	case generic.FailWholeDeployProcessImmediately:
-		switch {
-		case isReady:
-			return utils.GreenF("%s", resourceCaption)
-		case isFailed:
-			return utils.RedF("%s", resourceCaption)
-		default:
-			return utils.YellowF("%s", resourceCaption)
-		}
-
-	case generic.IgnoreAndContinueDeployProcess:
-		if isReady {
-			return utils.GreenF("%s", resourceCaption)
-		} else {
-			return resourceCaption
-		}
-
-	case generic.HopeUntilEndOfDeployProcess:
-		if isReady {
-			return utils.GreenF("%s", resourceCaption)
-		} else {
-			return utils.YellowF("%s", resourceCaption)
-		}
-
-	default:
-		panic(fmt.Sprintf("unsupported resource fail mode '%s'", resourceFailMode))
-	}
-}
-
+// podContainerLogChunkHeader 保持原 header 语义（解析 pod/container 用）。
 func podContainerLogChunkHeader(podName string, chunk *pod.ContainerLogChunk) string {
 	return fmt.Sprintf("po/%s container/%s", podName, chunk.ContainerName)
 }
