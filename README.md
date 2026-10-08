@@ -60,9 +60,9 @@ err := multitracker.Run(ctx, multitracker.Specs{
 
 
 
-### 3. 接管日志输出（对接 aiops 发布日志）
+### 3. 接管日志输出
 
-默认输出 JSON Lines 到 stdout。注入 `LogSink` 即可将事件流转投到平台：
+默认输出 JSON Lines 到 stdout。注入 `LogSink` 即可将事件流转投到对接平台：
 
 ```go
 import "github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack"
