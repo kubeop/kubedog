@@ -15,14 +15,14 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/werf/kubedog/pkg/informer"
-	"github.com/werf/kubedog/pkg/tracker"
-	"github.com/werf/kubedog/pkg/tracker/debug"
-	"github.com/werf/kubedog/pkg/tracker/event"
-	"github.com/werf/kubedog/pkg/tracker/pod"
-	"github.com/werf/kubedog/pkg/tracker/replicaset"
-	"github.com/werf/kubedog/pkg/trackers/dyntracker/util"
-	"github.com/werf/kubedog/pkg/utils"
+	"github.com/kubeop/kubedog/pkg/informer"
+	"github.com/kubeop/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/event"
+	"github.com/kubeop/kubedog/pkg/tracker/pod"
+	"github.com/kubeop/kubedog/pkg/tracker/replicaset"
+	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
+	"github.com/kubeop/kubedog/pkg/utils"
 )
 
 type ReplicaSetAddedReport struct {

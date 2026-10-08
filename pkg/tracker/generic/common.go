@@ -8,7 +8,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/werf/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
 )
 
 func init() {

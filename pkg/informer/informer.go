@@ -12,7 +12,7 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/werf/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
 )
 
 type informerFromFactoryOptions struct {

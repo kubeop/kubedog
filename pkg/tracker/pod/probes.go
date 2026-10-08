@@ -7,7 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/werf/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
 )
 
 type ReadinessProbe struct {

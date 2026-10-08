@@ -8,7 +8,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/werf/kubedog/pkg/tracker/generic"
+	"github.com/kubeop/kubedog/pkg/tracker/generic"
 )
 
 type Resource struct {

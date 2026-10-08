@@ -4,7 +4,7 @@ import (
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/werf/kubedog/pkg/trackers/dyntracker/util"
+	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
 )
 
 type AbsenceTaskState struct {

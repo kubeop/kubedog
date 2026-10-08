@@ -3,7 +3,7 @@ package multitrack
 import (
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/werf/kubedog/pkg/tracker/canary"
+	"github.com/kubeop/kubedog/pkg/tracker/canary"
 )
 
 func (mt *multitracker) TrackCanary(kube kubernetes.Interface, spec MultitrackSpec, opts MultitrackOptions) error {

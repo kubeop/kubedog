@@ -18,12 +18,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/werf/kubedog/pkg/display"
-	"github.com/werf/kubedog/pkg/informer"
-	"github.com/werf/kubedog/pkg/tracker"
-	"github.com/werf/kubedog/pkg/tracker/debug"
-	"github.com/werf/kubedog/pkg/tracker/event"
-	"github.com/werf/kubedog/pkg/trackers/dyntracker/util"
+	"github.com/kubeop/kubedog/pkg/display"
+	"github.com/kubeop/kubedog/pkg/informer"
+	"github.com/kubeop/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/event"
+	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
 )
 
 var errLogStreamingTimeout = errors.New("log streaming timeout reached")

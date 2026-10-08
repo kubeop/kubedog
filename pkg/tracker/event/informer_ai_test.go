@@ -19,8 +19,8 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/werf/kubedog/pkg/informer"
-	"github.com/werf/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/informer"
+	"github.com/kubeop/kubedog/pkg/tracker"
 )
 
 var eventsGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "events"}

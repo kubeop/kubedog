@@ -5,9 +5,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 
-	"github.com/werf/kubedog/pkg/tracker/indicators"
-	"github.com/werf/kubedog/pkg/tracker/pod"
-	"github.com/werf/kubedog/pkg/utils"
+	"github.com/kubeop/kubedog/pkg/tracker/indicators"
+	"github.com/kubeop/kubedog/pkg/tracker/pod"
+	"github.com/kubeop/kubedog/pkg/utils"
 )
 
 type DeploymentStatus struct {

@@ -16,10 +16,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/werf/kubedog/pkg/informer"
-	"github.com/werf/kubedog/pkg/tracker"
-	"github.com/werf/kubedog/pkg/tracker/debug"
-	"github.com/werf/kubedog/pkg/trackers/dyntracker/util"
+	"github.com/kubeop/kubedog/pkg/informer"
+	"github.com/kubeop/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
 )
 
 type ProbeTriggeredRestart struct {

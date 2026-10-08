@@ -61,7 +61,7 @@ To use `kubedog` in CI prefer activating `kubedog` manually instead. For this ex
 
 ### Alternative binary installation
 
-The recommended way to install `kubedog` is described above. Alternatively, although not recommended, you can download `kubedog` binary straight from the [GitHub Releases page](https://github.com/werf/kubedog/releases/), optionally verifying the binary with the PGP signature.
+The recommended way to install `kubedog` is described above. Alternatively, although not recommended, you can download `kubedog` binary straight from the [GitHub Releases page](https://github.com/kubeop/kubedog/releases/), optionally verifying the binary with the PGP signature.
 
 ## Usage
 
@@ -70,7 +70,7 @@ The recommended way to install `kubedog` is described above. Alternatively, alth
 
 ## Community
 
-Please feel free to reach us via [project's Discussions](https://github.com/werf/kubedog/discussions) and [werf's Telegram group](https://t.me/werf_io) (there's [another one in Russian](https://t.me/werf_ru) as well).
+Please feel free to reach us via [project's Discussions](https://github.com/kubeop/kubedog/discussions) and [werf's Telegram group](https://t.me/werf_io) (there's [another one in Russian](https://t.me/werf_ru) as well).
 
 You're also welcome to follow [@werf_io](https://twitter.com/werf_io) to stay informed about all important news, articles, etc.
 

@@ -5,8 +5,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	gentrck "github.com/werf/kubedog/pkg/tracker/generic"
-	"github.com/werf/kubedog/pkg/trackers/rollout/multitrack/generic"
+	gentrck "github.com/kubeop/kubedog/pkg/tracker/generic"
+	"github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack/generic"
 )
 
 func (mt *multitracker) TrackGeneric(resource *generic.Resource, timeout, noActivityTimeout time.Duration) error {

@@ -3,7 +3,7 @@ package generic
 import (
 	"sync"
 
-	"github.com/werf/kubedog/pkg/tracker/generic"
+	"github.com/kubeop/kubedog/pkg/tracker/generic"
 )
 
 type ResourceState string

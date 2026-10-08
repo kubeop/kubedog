@@ -13,10 +13,10 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/werf/kubedog/pkg/informer"
-	"github.com/werf/kubedog/pkg/tracker/debug"
-	"github.com/werf/kubedog/pkg/tracker/resid"
-	"github.com/werf/kubedog/pkg/trackers/dyntracker/util"
+	"github.com/kubeop/kubedog/pkg/informer"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/resid"
+	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
 )
 
 const ResourceStatusStabilizingDuration time.Duration = 2 * time.Second

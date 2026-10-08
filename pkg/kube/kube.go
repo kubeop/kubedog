@@ -23,7 +23,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
 
-	"github.com/werf/kubedog/pkg/utils"
+	"github.com/kubeop/kubedog/pkg/utils"
 )
 
 const (

@@ -15,12 +15,12 @@ import (
 	"k8s.io/klog"
 	klog_v2 "k8s.io/klog/v2"
 
-	"github.com/werf/kubedog"
-	"github.com/werf/kubedog/pkg/kube"
-	"github.com/werf/kubedog/pkg/tracker"
-	"github.com/werf/kubedog/pkg/trackers/follow"
-	"github.com/werf/kubedog/pkg/trackers/rollout"
-	"github.com/werf/kubedog/pkg/trackers/rollout/multitrack"
+	"github.com/kubeop/kubedog"
+	"github.com/kubeop/kubedog/pkg/kube"
+	"github.com/kubeop/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/trackers/follow"
+	"github.com/kubeop/kubedog/pkg/trackers/rollout"
+	"github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack"
 	"github.com/werf/logboek"
 )
 

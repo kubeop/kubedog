@@ -5,10 +5,10 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/werf/kubedog/pkg/display"
-	"github.com/werf/kubedog/pkg/tracker"
-	"github.com/werf/kubedog/pkg/tracker/deployment"
-	"github.com/werf/kubedog/pkg/tracker/replicaset"
+	"github.com/kubeop/kubedog/pkg/display"
+	"github.com/kubeop/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/tracker/deployment"
+	"github.com/kubeop/kubedog/pkg/tracker/replicaset"
 )
 
 func TrackDeployment(name, namespace string, kube kubernetes.Interface, opts tracker.Options) error {

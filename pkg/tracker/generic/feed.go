@@ -8,7 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	watchtools "k8s.io/client-go/tools/watch"
 
-	"github.com/werf/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/tracker"
 )
 
 type Feed struct {

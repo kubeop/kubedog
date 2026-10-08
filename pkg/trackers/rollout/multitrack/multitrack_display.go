@@ -10,10 +10,10 @@ import (
 
 	dur "k8s.io/apimachinery/pkg/util/duration"
 
-	"github.com/werf/kubedog/pkg/tracker/indicators"
-	"github.com/werf/kubedog/pkg/tracker/pod"
-	"github.com/werf/kubedog/pkg/trackers/rollout/multitrack/generic"
-	"github.com/werf/kubedog/pkg/utils"
+	"github.com/kubeop/kubedog/pkg/tracker/indicators"
+	"github.com/kubeop/kubedog/pkg/tracker/pod"
+	"github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack/generic"
+	"github.com/kubeop/kubedog/pkg/utils"
 	"github.com/werf/logboek"
 	"github.com/werf/logboek/pkg/style"
 	"github.com/werf/logboek/pkg/types"

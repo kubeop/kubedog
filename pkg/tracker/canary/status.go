@@ -3,8 +3,8 @@ package canary
 import (
 	"github.com/fluxcd/flagger/pkg/apis/flagger/v1beta1"
 
-	"github.com/werf/kubedog/pkg/tracker/indicators"
-	"github.com/werf/kubedog/pkg/utils"
+	"github.com/kubeop/kubedog/pkg/tracker/indicators"
+	"github.com/kubeop/kubedog/pkg/utils"
 )
 
 type CanaryStatus struct {

@@ -5,8 +5,8 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/werf/kubedog/pkg/tracker/replicaset"
-	"github.com/werf/kubedog/pkg/tracker/statefulset"
+	"github.com/kubeop/kubedog/pkg/tracker/replicaset"
+	"github.com/kubeop/kubedog/pkg/tracker/statefulset"
 )
 
 func (mt *multitracker) TrackStatefulSet(kube kubernetes.Interface, spec MultitrackSpec, opts MultitrackOptions) error {

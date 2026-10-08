@@ -14,15 +14,15 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/werf/kubedog/pkg/informer"
-	"github.com/werf/kubedog/pkg/tracker"
-	"github.com/werf/kubedog/pkg/tracker/canary"
-	"github.com/werf/kubedog/pkg/tracker/daemonset"
-	"github.com/werf/kubedog/pkg/tracker/debug"
-	"github.com/werf/kubedog/pkg/tracker/deployment"
-	"github.com/werf/kubedog/pkg/tracker/job"
-	"github.com/werf/kubedog/pkg/tracker/statefulset"
-	"github.com/werf/kubedog/pkg/trackers/rollout/multitrack/generic"
+	"github.com/kubeop/kubedog/pkg/informer"
+	"github.com/kubeop/kubedog/pkg/tracker"
+	"github.com/kubeop/kubedog/pkg/tracker/canary"
+	"github.com/kubeop/kubedog/pkg/tracker/daemonset"
+	"github.com/kubeop/kubedog/pkg/tracker/debug"
+	"github.com/kubeop/kubedog/pkg/tracker/deployment"
+	"github.com/kubeop/kubedog/pkg/tracker/job"
+	"github.com/kubeop/kubedog/pkg/tracker/statefulset"
+	"github.com/kubeop/kubedog/pkg/trackers/rollout/multitrack/generic"
 	"github.com/werf/logboek/pkg/types"
 )
 
@@ -102,7 +102,7 @@ func newMultitrackOptions(parentContext context.Context, timeout, statusProgessP
 			LogsFromTime:                             logsFromTime,
 			IgnoreReadinessProbeFailsByContainerName: opts.IgnoreReadinessProbeFailsByContainerName,
 			// 共享 informer 工厂：由 Multitrack() 装配（或调用方注入），必须透传给各 spec tracker
-			InformerFactory:                          opts.InformerFactory,
+			InformerFactory: opts.InformerFactory,
 		},
 		StatusProgressPeriod: statusProgessPeriod,
 		Logger:               opts.Logger,

@@ -1,7 +1,7 @@
 package statestore
 
 import (
-	"github.com/werf/kubedog/pkg/trackers/dyntracker/util"
+	"github.com/kubeop/kubedog/pkg/trackers/dyntracker/util"
 )
 
 type TaskStore struct {

@@ -1,4 +1,4 @@
-module github.com/werf/kubedog
+module github.com/kubeop/kubedog
 
 go 1.26.0
 
